@@ -77,34 +77,50 @@ def get_email_data(msg_bytes):
 def process_images(book, html_str, cid_images):
     global IMAGE_ID_COUNTER
     try:
-        # Use a more robust parsing approach
         parser = html.HTMLParser(encoding='utf-8')
         tree = html.fromstring(html_str.encode('utf-8'), parser=parser)
     except Exception:
         return html_str
 
     for img in tree.xpath('//img'):
+        # Newsletter-specific: Check for lazy-loading attributes
         src = img.get('src')
-        if not src: continue
+        data_src = img.get('data-src')
+        orig_src = img.get('original-src')
+        
+        # Prioritize lazy-load attributes if they exist
+        target_url = data_src or orig_src or src
+        if not target_url: continue
             
         img_data = None
         img_type = "image/jpeg"
         
-        if src.startswith('cid:'):
-            cid = src[4:]
+        if target_url.startswith('cid:'):
+            cid = target_url[4:]
             if cid in cid_images:
                 img_data = cid_images[cid]['data']
                 img_type = cid_images[cid]['type']
-        elif src.startswith('http'):
+        elif target_url.startswith('http'):
+            # Skip common tracking pixels (1x1 images)
+            if any(x in target_url for x in ['pixel', 'click.pstmrk.it', 'open.track']):
+                img.getparent().remove(img)
+                continue
+                
             try:
-                res = requests.get(src, timeout=15, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'})
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+                res = requests.get(target_url, timeout=15, headers=headers)
                 if res.status_code == 200:
                     img_data = res.content
                     img_type = res.headers.get('Content-Type', 'image/jpeg')
             except Exception as e:
-                print(f"Failed image download {src}: {e}")
+                print(f"Failed image download {target_url}: {e}")
 
         if img_data:
+            # Skip images that are actually just 1x1 pixels after download check
+            if len(img_data) < 100:
+                img.getparent().remove(img)
+                continue
+
             # Standardize media types
             if 'png' in img_type.lower(): m_type, ext = 'image/png', 'png'
             elif 'gif' in img_type.lower(): m_type, ext = 'image/gif', 'gif'
@@ -123,15 +139,17 @@ def process_images(book, html_str, cid_images):
             # Point to local file (assuming chapters are in 'text/')
             img.set('src', f"../{img_filename}")
             
-            # Emoji detection
+            # Emoji detection (small dimensions)
             w = img.get('width', '')
             h = img.get('height', '')
-            if (w and w.isdigit() and int(w) < 100) or (h and h.isdigit() and int(h) < 100) or ("emoji" in src.lower()):
+            if (w and w.isdigit() and int(w) < 100) or (h and h.isdigit() and int(h) < 100) or ("emoji" in target_url.lower()):
                 img.set('class', 'emoji')
             
             IMAGE_ID_COUNTER += 1
+        else:
+            # If we couldn't get data, remove the broken image tag to keep the EPUB clean
+            img.getparent().remove(img)
             
-    # Return as clean XHTML fragment
     return html.tostring(tree, encoding='unicode', method='xml')
 
 def process_newsletters():
