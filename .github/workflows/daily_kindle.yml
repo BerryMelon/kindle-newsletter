@@ -1,7 +1,7 @@
 name: Kindle Daily Newsletter
 on:
   schedule:
-    - cron: '0 6 * * *' # Run at 6:00 AM UTC daily
+    - cron: '0 14 * * *' # Run at 7:00 AM PST (14:00 UTC) daily
   workflow_dispatch: # Allows manual trigger
 
 jobs:
