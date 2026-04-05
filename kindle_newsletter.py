@@ -8,7 +8,7 @@ from email.message import EmailMessage
 from imapclient import IMAPClient
 from readability import Document
 from ebooklib import epub
-from lxml import html, etree
+from lxml import html
 
 # --- Configuration ---
 GMAIL_USER = os.getenv('GMAIL_USER')
@@ -77,15 +77,13 @@ def get_email_data(msg_bytes):
 def process_images(book, html_str, cid_images):
     global IMAGE_ID_COUNTER
     try:
-        # Use fragment_fromstring to avoid <html>/<body> wrapping
-        tree = html.fragment_fromstring(html_str, create_parent='div')
+        # Use a more robust parsing approach
+        parser = html.HTMLParser(encoding='utf-8')
+        tree = html.fromstring(html_str.encode('utf-8'), parser=parser)
     except Exception:
-        try:
-            tree = html.fromstring(html_str)
-        except Exception:
-            return html_str
+        return html_str
 
-    for img in tree.xpath('.//img'):
+    for img in tree.xpath('//img'):
         src = img.get('src')
         if not src: continue
             
@@ -99,7 +97,7 @@ def process_images(book, html_str, cid_images):
                 img_type = cid_images[cid]['type']
         elif src.startswith('http'):
             try:
-                res = requests.get(src, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                res = requests.get(src, timeout=15, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'})
                 if res.status_code == 200:
                     img_data = res.content
                     img_type = res.headers.get('Content-Type', 'image/jpeg')
@@ -107,9 +105,9 @@ def process_images(book, html_str, cid_images):
                 print(f"Failed image download {src}: {e}")
 
         if img_data:
-            # Clean up media type for Kindle
-            if 'png' in img_type: m_type, ext = 'image/png', 'png'
-            elif 'gif' in img_type: m_type, ext = 'image/gif', 'gif'
+            # Standardize media types
+            if 'png' in img_type.lower(): m_type, ext = 'image/png', 'png'
+            elif 'gif' in img_type.lower(): m_type, ext = 'image/gif', 'gif'
             else: m_type, ext = 'image/jpeg', 'jpg'
             
             img_filename = f"images/img_{IMAGE_ID_COUNTER}.{ext}"
@@ -122,15 +120,18 @@ def process_images(book, html_str, cid_images):
             )
             book.add_item(epub_img)
             
-            # Since chapters are in 'text/', we need to go up one level
+            # Point to local file (assuming chapters are in 'text/')
             img.set('src', f"../{img_filename}")
             
+            # Emoji detection
             w = img.get('width', '')
-            if (w and w.isdigit() and int(w) < 100) or ("emoji" in src.lower()):
+            h = img.get('height', '')
+            if (w and w.isdigit() and int(w) < 100) or (h and h.isdigit() and int(h) < 100) or ("emoji" in src.lower()):
                 img.set('class', 'emoji')
             
             IMAGE_ID_COUNTER += 1
             
+    # Return as clean XHTML fragment
     return html.tostring(tree, encoding='unicode', method='xml')
 
 def process_newsletters():
@@ -175,10 +176,8 @@ def create_epub(articles):
 
     chapters = []
     for i, art in enumerate(articles):
-        # process_images now returns valid XML string
         processed_content = process_images(book, art['content'], art['cid_images'])
         
-        # Move chapters to 'text/' subfolder for better compatibility
         chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='en')
         chapter.content = f"<h1>{art['title']}</h1><p style='text-align:center'><small>From: {art['sender']}</small></p>{processed_content}"
         chapter.add_item(style_item)
