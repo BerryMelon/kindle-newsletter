@@ -1,0 +1,4 @@
+imapclient
+readability-lxml
+ebooklib
+lxml

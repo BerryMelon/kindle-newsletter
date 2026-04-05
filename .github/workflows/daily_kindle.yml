@@ -1,0 +1,23 @@
+name: Kindle Daily Newsletter
+on:
+  schedule:
+    - cron: '0 6 * * *' # Run at 6:00 AM UTC daily
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  run-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run Digest Script
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          KINDLE_EMAIL: ${{ secrets.KINDLE_EMAIL }}
+        run: python kindle_newsletter.py
