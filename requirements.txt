@@ -2,3 +2,4 @@ imapclient
 readability-lxml
 ebooklib
 lxml
+requests
