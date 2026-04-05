@@ -17,20 +17,38 @@ KINDLE_EMAIL = os.getenv('KINDLE_EMAIL')
 SOURCE_LABEL = 'Daily-Digest'
 PROCESSED_LABEL = 'Daily-Digest/Processed'
 
-# CSS to ensure images and emojis don't overflow
+# CSS to ensure images and emojis don't overflow and emojis stay small
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
-body { font-family: sans-serif; }
-h1 { text-align: center; font-size: 1.5em; }
+body { font-family: sans-serif; line-height: 1.5; }
+h1 { text-align: center; font-size: 1.4em; margin-bottom: 0.5em; }
+p { margin-bottom: 1em; }
+
+/* Large images: Responsive but not overwhelming */
 img { 
     max-width: 100%; 
     height: auto; 
     display: block; 
-    margin: 10px auto; 
+    margin: 15px auto; 
 }
-/* Attempt to catch small icons/emojis that should stay inline */
+
+/* Small icons/emojis: Keep them inline and same height as text */
 img[width="1"], img[height="1"] { display: none; }
+
+/* Target images that are likely emojis (usually small in newsletters) */
+img.emoji, 
+img[width*="px"][width^="1"], img[width*="px"][width^="2"], img[width*="px"][width^="3"],
+img[style*="width: 1"], img[style*="width: 2"], img[style*="width: 3"] {
+    display: inline-block !important;
+    height: 1.2em !important;
+    width: auto !important;
+    vertical-align: middle;
+    margin: 0 0.1em;
+}
 '''
+
+# Global counter to ensure unique image IDs across all chapters
+IMAGE_ID_COUNTER = 0
 
 def get_email_data(msg_bytes):
     """Extracts subject, HTML body, and CID attachments from email bytes."""
@@ -72,9 +90,12 @@ def get_email_data(msg_bytes):
 
 def process_images(book, html_str, cid_images):
     """Downloads remote images and maps CID images into the EPUB book."""
-    tree = html.fromstring(html_str)
-    img_count = 0
-    
+    global IMAGE_ID_COUNTER
+    try:
+        tree = html.fromstring(html_str)
+    except Exception:
+        return html_str # Return original if parsing fails
+
     for img in tree.xpath('//img'):
         src = img.get('src')
         if not src:
@@ -93,7 +114,6 @@ def process_images(book, html_str, cid_images):
         # Handle remote images
         elif src.startswith('http'):
             try:
-                # Add a timeout and user-agent to avoid hangs or blocks
                 res = requests.get(src, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
                 if res.status_code == 200:
                     img_data = res.content
@@ -102,13 +122,16 @@ def process_images(book, html_str, cid_images):
                 print(f"Failed to download image {src}: {e}")
 
         if img_data:
-            # Create a unique filename for the image inside the EPUB
             ext = img_type.split('/')[-1].split(';')[0] or 'jpg'
-            img_filename = f"images/img_{hashlib.md5(src.encode()).hexdigest()}.{ext}"
+            # Sanitize extension
+            if 'png' in ext: ext = 'png'
+            elif 'gif' in ext: ext = 'gif'
+            else: ext = 'jpg'
             
-            # Add to book
+            img_filename = f"images/img_{IMAGE_ID_COUNTER}.{ext}"
+            
             epub_img = epub.EpubItem(
-                uid=f"img_{img_count}",
+                uid=f"img_{IMAGE_ID_COUNTER}",
                 file_name=img_filename,
                 media_type=img_type,
                 content=img_data
@@ -117,7 +140,13 @@ def process_images(book, html_str, cid_images):
             
             # Update HTML to point to the local file
             img.set('src', img_filename)
-            img_count += 1
+            
+            # If the image is very small (potential emoji), give it a class
+            w = img.get('width', '')
+            if w and w.isdigit() and int(w) < 50:
+                img.set('class', 'emoji')
+            
+            IMAGE_ID_COUNTER += 1
             
     return html.tostring(tree, encoding='unicode')
 
@@ -140,9 +169,8 @@ def process_newsletters():
             subject, sender, raw_html, cid_images = get_email_data(data[b'RFC822'])
             
             doc = Document(raw_html)
-            # Use Subject if Readability title is generic or missing
             title = doc.short_title()
-            if not title or title.lower() in ['[no-title]', 'untitled', 'no title']:
+            if not title or title.lower() in ['[no-title]', 'untitled', 'no title', 'no-title']:
                 title = subject
             
             articles.append({
@@ -173,7 +201,6 @@ def create_epub(articles):
 
     chapters = []
     for i, art in enumerate(articles):
-        # Process and embed images into the book and update HTML
         processed_content = process_images(book, art['content'], art['cid_images'])
         
         chapter = epub.EpubHtml(title=art['title'], file_name=f'chap_{i}.xhtml', lang='en')
