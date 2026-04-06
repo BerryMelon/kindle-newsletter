@@ -4,11 +4,17 @@ import smtplib
 import email
 import requests
 import hashlib
+import re
 from email.message import EmailMessage
 from imapclient import IMAPClient
 from readability import Document
 from ebooklib import epub
 from lxml import html
+try:
+    from lxml.html.clean import Cleaner
+except ImportError:
+    # Fallback for older lxml or missing lxml_html_clean
+    Cleaner = None
 
 # --- Configuration ---
 GMAIL_USER = os.getenv('GMAIL_USER')
@@ -19,9 +25,11 @@ PROCESSED_LABEL = 'Daily-Digest/Processed'
 
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
-body { font-family: sans-serif; line-height: 1.5; margin: 10px; }
+body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; line-height: 1.5; margin: 10px; }
 h1 { text-align: center; font-size: 1.4em; margin-bottom: 0.5em; }
-p { margin-bottom: 1em; }
+h2 { font-size: 1.2em; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 20px; }
+h3 { font-size: 1.1em; margin-top: 15px; }
+p { margin-bottom: 1em; text-align: justify; }
 img { 
     max-width: 100%; 
     height: auto; 
@@ -35,9 +43,46 @@ img.emoji {
     vertical-align: middle;
     margin: 0 0.1em;
 }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+td { padding: 5px; vertical-align: top; }
 '''
 
 IMAGE_ID_COUNTER = 0
+
+def clean_html_safe(raw_html):
+    """Fallback cleaner for newsletters that Readability fails on."""
+    if Cleaner is None:
+        return raw_html
+        
+    cleaner = Cleaner(
+        scripts=True,
+        javascript=True,
+        comments=True,
+        style=False,
+        links=False,
+        meta=True,
+        page_structure=False,
+        processing_instructions=True,
+        embedded=True,
+        frames=True,
+        forms=True,
+        annoying_tags=True,
+        remove_tags=['span', 'font']
+    )
+    
+    # Pre-process to remove common newsletter clutter
+    # Remove spacer rows/cells (often have height attribute)
+    raw_html = re.sub(r'<td[^>]*height="[0-9]{1,2}"[^>]*>.*?</td>', '', raw_html, flags=re.IGNORECASE | re.DOTALL)
+    raw_html = re.sub(r'<tr[^>]*height="[0-9]{1,2}"[^>]*>.*?</tr>', '', raw_html, flags=re.IGNORECASE | re.DOTALL)
+    
+    try:
+        parser = html.HTMLParser(encoding='utf-8')
+        tree = html.fromstring(raw_html.encode('utf-8'), parser=parser)
+        cleaned_node = cleaner.clean_html(tree)
+        return html.tostring(cleaned_node, encoding='unicode', method='html')
+    except Exception as e:
+        print(f"Safe clean failed: {e}")
+        return raw_html
 
 def get_email_data(msg_bytes):
     msg = email.message_from_bytes(msg_bytes)
@@ -60,7 +105,9 @@ def get_email_data(msg_bytes):
             content_type = part.get_content_type()
             disposition = str(part.get("Content-Disposition"))
             if content_type == "text/html" and "attachment" not in disposition:
-                html_content = part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8', errors='ignore')
+                payload = part.get_payload(decode=True)
+                charset = part.get_content_charset() or 'utf-8'
+                html_content = payload.decode(charset, errors='ignore')
             elif content_type.startswith("image/"):
                 cid = part.get("Content-ID")
                 if cid:
@@ -70,12 +117,16 @@ def get_email_data(msg_bytes):
                         'type': content_type
                     }
     else:
-        html_content = msg.get_payload(decode=True).decode(msg.get_content_charset() or 'utf-8', errors='ignore')
+        payload = msg.get_payload(decode=True)
+        charset = msg.get_content_charset() or 'utf-8'
+        html_content = payload.decode(charset, errors='ignore')
 
     return decoded_subject, from_header, html_content, cid_images
 
 def process_images(book, html_str, cid_images):
     global IMAGE_ID_COUNTER
+    if not html_str: return ""
+    
     try:
         parser = html.HTMLParser(encoding='utf-8')
         tree = html.fromstring(html_str.encode('utf-8'), parser=parser)
@@ -85,12 +136,15 @@ def process_images(book, html_str, cid_images):
     for img in tree.xpath('//img'):
         # Newsletter-specific: Check for lazy-loading attributes
         src = img.get('src')
-        data_src = img.get('data-src')
-        orig_src = img.get('original-src')
+        data_src = img.get('data-src') or img.get('data-original-src') or img.get('original-src')
         
-        # Prioritize lazy-load attributes if they exist
-        target_url = data_src or orig_src or src
+        target_url = data_src or src
         if not target_url: continue
+        
+        # Handle Google Image Proxy URLs (ci3.googleusercontent.com...#original_url)
+        if 'googleusercontent.com/meips/' in target_url and '#' in target_url:
+            # The part after '#' is often the actual original URL
+            target_url = target_url.split('#')[-1]
             
         img_data = None
         img_type = "image/jpeg"
@@ -101,14 +155,21 @@ def process_images(book, html_str, cid_images):
                 img_data = cid_images[cid]['data']
                 img_type = cid_images[cid]['type']
         elif target_url.startswith('http'):
-            # Skip common tracking pixels (1x1 images)
-            if any(x in target_url for x in ['pixel', 'click.pstmrk.it', 'open.track']):
+            # Skip common tracking pixels and spacers
+            if any(x in target_url.lower() for x in ['pixel', 'click.pstmrk.it', 'open.track', 'spacer', 'tracking']):
+                img.getparent().remove(img)
+                continue
+            
+            # Skip very small dimensions if specified in attributes
+            w = img.get('width')
+            h = img.get('height')
+            if w == '1' or h == '1':
                 img.getparent().remove(img)
                 continue
                 
             try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-                res = requests.get(target_url, timeout=15, headers=headers)
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+                res = requests.get(target_url, timeout=10, headers=headers)
                 if res.status_code == 200:
                     img_data = res.content
                     img_type = res.headers.get('Content-Type', 'image/jpeg')
@@ -116,14 +177,15 @@ def process_images(book, html_str, cid_images):
                 print(f"Failed image download {target_url}: {e}")
 
         if img_data:
-            # Skip images that are actually just 1x1 pixels after download check
-            if len(img_data) < 100:
+            # Filter out true 1x1 pixels or broken files
+            if len(img_data) < 40:
                 img.getparent().remove(img)
                 continue
 
             # Standardize media types
             if 'png' in img_type.lower(): m_type, ext = 'image/png', 'png'
             elif 'gif' in img_type.lower(): m_type, ext = 'image/gif', 'gif'
+            elif 'webp' in img_type.lower(): m_type, ext = 'image/webp', 'webp'
             else: m_type, ext = 'image/jpeg', 'jpg'
             
             img_filename = f"images/img_{IMAGE_ID_COUNTER}.{ext}"
@@ -142,12 +204,12 @@ def process_images(book, html_str, cid_images):
             # Emoji detection (small dimensions)
             w = img.get('width', '')
             h = img.get('height', '')
-            if (w and w.isdigit() and int(w) < 100) or (h and h.isdigit() and int(h) < 100) or ("emoji" in target_url.lower()):
+            if (w and w.isdigit() and int(w) < 50) or (h and h.isdigit() and int(h) < 50) or ("emoji" in target_url.lower()):
                 img.set('class', 'emoji')
             
             IMAGE_ID_COUNTER += 1
         else:
-            # If we couldn't get data, remove the broken image tag to keep the EPUB clean
+            # If we couldn't get data, remove the broken image tag
             img.getparent().remove(img)
             
     return html.tostring(tree, encoding='unicode', method='xml')
@@ -162,16 +224,29 @@ def process_newsletters():
         
         if not messages: return None
 
-        for msgid, data in client.fetch(messages, 'RFC822').items():
-            subject, sender, raw_html, cid_images = get_email_data(data[b'RFC822'])
+        fetch_data = client.fetch(messages, 'RFC822')
+        for msgid in messages:
+            if msgid not in fetch_data: continue
+            
+            subject, sender, raw_html, cid_images = get_email_data(fetch_data[msgid][b'RFC822'])
+            
             doc = Document(raw_html)
             title = doc.short_title()
             if not title or any(x in title.lower() for x in ['no title', 'untitled', 'no-title']):
                 title = subject
             
+            content = doc.summary()
+            
+            # Fallback for newsletters that Readability fails to extract meaningful content from
+            # If summary is very short compared to original, or contains almost no text
+            plain_text = re.sub('<[^<]+?>', '', content).strip()
+            if (len(content) < 600 and len(raw_html) > 3000) or len(plain_text) < 100:
+                print(f"Readability failed for '{title}' (extracted {len(plain_text)} chars), using safe cleaner fallback.")
+                content = clean_html_safe(raw_html)
+            
             articles.append({
                 'title': title,
-                'content': doc.summary(),
+                'content': content,
                 'cid_images': cid_images,
                 'sender': sender
             })
@@ -187,7 +262,10 @@ def create_epub(articles):
     book = epub.EpubBook()
     book.set_identifier(f'digest-{datetime.date.today().isoformat()}')
     book.set_title(f'Daily Digest - {date_str}')
-    book.set_language('en')
+    
+    # Detect if any article has Korean characters and set language accordingly
+    has_korean = any(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['content']) for art in articles)
+    book.set_language('ko' if has_korean else 'en')
     
     style_item = epub.EpubItem(uid="style_default", file_name="style/default.css", media_type="text/css", content=DEFAULT_STYLE)
     book.add_item(style_item)
@@ -196,7 +274,7 @@ def create_epub(articles):
     for i, art in enumerate(articles):
         processed_content = process_images(book, art['content'], art['cid_images'])
         
-        chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='en')
+        chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if has_korean else 'en')
         chapter.content = f"<h1>{art['title']}</h1><p style='text-align:center'><small>From: {art['sender']}</small></p>{processed_content}"
         chapter.add_item(style_item)
         

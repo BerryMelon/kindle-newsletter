@@ -2,4 +2,5 @@ imapclient
 readability-lxml
 ebooklib
 lxml
+lxml_html_clean
 requests
