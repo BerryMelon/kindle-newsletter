@@ -36,18 +36,16 @@ img {
     display: block; 
     margin: 15px auto; 
 }
-img.emoji {
-    display: inline-block !important;
-    height: 1.2em !important;
-    width: auto !important;
-    vertical-align: middle;
-    margin: 0 0.1em;
-}
 table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-td { padding: 5px; vertical-align: top; }
+td { padding: 5px; border-bottom: 1px solid #eee; }
 '''
 
 IMAGE_ID_COUNTER = 0
+
+def strip_emojis(text):
+    """Remove characters outside the Basic Multilingual Plane (emojis)."""
+    if not text: return ""
+    return re.sub(r'[^\u0000-\uFFFF]', '', text)
 
 def clean_html_safe(raw_html):
     """Fallback cleaner for newsletters that Readability fails on."""
@@ -58,7 +56,7 @@ def clean_html_safe(raw_html):
         scripts=True,
         javascript=True,
         comments=True,
-        style=False,
+        style=True,      # Strip ALL inline styles to prevent clipping/overflow issues
         links=False,
         meta=True,
         page_structure=False,
@@ -67,17 +65,30 @@ def clean_html_safe(raw_html):
         frames=True,
         forms=True,
         annoying_tags=True,
-        remove_tags=['span', 'font']
+        remove_tags=['span', 'font', 'div'] # Flatten unnecessary wrappers
     )
-    
-    # Pre-process to remove common newsletter clutter
-    # Remove spacer rows/cells (often have height attribute)
-    raw_html = re.sub(r'<td[^>]*height="[0-9]{1,2}"[^>]*>.*?</td>', '', raw_html, flags=re.IGNORECASE | re.DOTALL)
-    raw_html = re.sub(r'<tr[^>]*height="[0-9]{1,2}"[^>]*>.*?</tr>', '', raw_html, flags=re.IGNORECASE | re.DOTALL)
     
     try:
         parser = html.HTMLParser(encoding='utf-8')
         tree = html.fromstring(raw_html.encode('utf-8'), parser=parser)
+        
+        # Remove spacer rows/cells that often cause weird layout issues
+        for node in tree.xpath('//td[@height] | //tr[@height]'):
+            h = node.get('height')
+            if h and h.isdigit() and int(h) < 30:
+                text = node.text_content().strip()
+                if not text:
+                    node.getparent().remove(node)
+
+        # Strip width/height/bgcolor attributes to let Kindle handle the flow
+        for tag in tree.xpath('//table | //td | //tr | //th | //img'):
+            for attr in ['width', 'height', 'style', 'bgcolor', 'background', 'valign', 'align']:
+                if attr in tag.attrib:
+                    # Keep width/height on images if they are reasonably large, but better to let CSS handle it
+                    if tag.tag == 'img' and attr in ['width', 'height']:
+                        continue
+                    del tag.attrib[attr]
+
         cleaned_node = cleaner.clean_html(tree)
         return html.tostring(cleaned_node, encoding='unicode', method='html')
     except Exception as e:
@@ -134,16 +145,12 @@ def process_images(book, html_str, cid_images):
         return html_str
 
     for img in tree.xpath('//img'):
-        # Newsletter-specific: Check for lazy-loading attributes
         src = img.get('src')
         data_src = img.get('data-src') or img.get('data-original-src') or img.get('original-src')
-        
         target_url = data_src or src
         if not target_url: continue
         
-        # Handle Google Image Proxy URLs (ci3.googleusercontent.com...#original_url)
         if 'googleusercontent.com/meips/' in target_url and '#' in target_url:
-            # The part after '#' is often the actual original URL
             target_url = target_url.split('#')[-1]
             
         img_data = None
@@ -155,12 +162,10 @@ def process_images(book, html_str, cid_images):
                 img_data = cid_images[cid]['data']
                 img_type = cid_images[cid]['type']
         elif target_url.startswith('http'):
-            # Skip common tracking pixels and spacers
             if any(x in target_url.lower() for x in ['pixel', 'click.pstmrk.it', 'open.track', 'spacer', 'tracking']):
                 img.getparent().remove(img)
                 continue
             
-            # Skip very small dimensions if specified in attributes
             w = img.get('width')
             h = img.get('height')
             if w == '1' or h == '1':
@@ -177,19 +182,16 @@ def process_images(book, html_str, cid_images):
                 print(f"Failed image download {target_url}: {e}")
 
         if img_data:
-            # Filter out true 1x1 pixels or broken files
             if len(img_data) < 40:
                 img.getparent().remove(img)
                 continue
 
-            # Standardize media types
             if 'png' in img_type.lower(): m_type, ext = 'image/png', 'png'
             elif 'gif' in img_type.lower(): m_type, ext = 'image/gif', 'gif'
             elif 'webp' in img_type.lower(): m_type, ext = 'image/webp', 'webp'
             else: m_type, ext = 'image/jpeg', 'jpg'
             
             img_filename = f"images/img_{IMAGE_ID_COUNTER}.{ext}"
-            
             epub_img = epub.EpubItem(
                 uid=f"img_{IMAGE_ID_COUNTER}",
                 file_name=img_filename,
@@ -197,19 +199,9 @@ def process_images(book, html_str, cid_images):
                 content=img_data
             )
             book.add_item(epub_img)
-            
-            # Point to local file (assuming chapters are in 'text/')
             img.set('src', f"../{img_filename}")
-            
-            # Emoji detection (small dimensions)
-            w = img.get('width', '')
-            h = img.get('height', '')
-            if (w and w.isdigit() and int(w) < 50) or (h and h.isdigit() and int(h) < 50) or ("emoji" in target_url.lower()):
-                img.set('class', 'emoji')
-            
             IMAGE_ID_COUNTER += 1
         else:
-            # If we couldn't get data, remove the broken image tag
             img.getparent().remove(img)
             
     return html.tostring(tree, encoding='unicode', method='xml')
@@ -236,13 +228,14 @@ def process_newsletters():
                 title = subject
             
             content = doc.summary()
-            
-            # Fallback for newsletters that Readability fails to extract meaningful content from
-            # If summary is very short compared to original, or contains almost no text
             plain_text = re.sub('<[^<]+?>', '', content).strip()
             if (len(content) < 600 and len(raw_html) > 3000) or len(plain_text) < 100:
-                print(f"Readability failed for '{title}' (extracted {len(plain_text)} chars), using safe cleaner fallback.")
+                print(f"Readability failed for '{title}', using safe cleaner fallback.")
                 content = clean_html_safe(raw_html)
+            
+            # Strip emojis from content
+            content = strip_emojis(content)
+            title = strip_emojis(title)
             
             articles.append({
                 'title': title,
@@ -263,7 +256,6 @@ def create_epub(articles):
     book.set_identifier(f'digest-{datetime.date.today().isoformat()}')
     book.set_title(f'Daily Digest - {date_str}')
     
-    # Detect if any article has Korean characters and set language accordingly
     has_korean = any(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['content']) for art in articles)
     book.set_language('ko' if has_korean else 'en')
     
