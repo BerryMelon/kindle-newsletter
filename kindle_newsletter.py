@@ -31,7 +31,16 @@ PROCESSED_LABEL = 'Daily-Digest/Processed'
 
 # Initialize Gemini Client if key is provided
 if GEMINI_API_KEY:
-    ai_client = genai.Client(api_key=GEMINI_API_KEY)
+    # Explicitly set api_version to 'v1' to avoid v1beta 404 errors
+    ai_client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1'})
+    try:
+        print("Checking available Gemini models...")
+        # Only print first few to keep logs clean
+        models = list(ai_client.models.list())
+        for m in models[:10]:
+            print(f" - Found model: {m.name}")
+    except Exception as e:
+        print(f"Could not list models: {e}")
 else:
     ai_client = None
 
