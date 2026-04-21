@@ -12,7 +12,7 @@ from imapclient import IMAPClient
 from readability import Document
 from ebooklib import epub
 from lxml import html
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 try:
     from lxml.html.clean import Cleaner
@@ -322,6 +322,51 @@ def process_newsletters():
         client.expunge()
     return articles
 
+def generate_cover_image(title, date_str):
+    """Generate a simple, modern cover image for the EPUB."""
+    width, height = 600, 800
+    # Dark blue-grey background
+    image = Image.new('RGB', (width, height), color=(44, 62, 80))
+    draw = ImageDraw.Draw(image)
+    
+    # Try to find a standard font
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", # Ubuntu
+        "/System/Library/Fonts/Helvetica.ttc",                # macOS
+        "/Library/Fonts/Arial.ttf",                           # macOS
+        "arial.ttf"                                           # Windows
+    ]
+    
+    title_font = None
+    date_font = None
+    for path in font_paths:
+        try:
+            if os.path.exists(path) or path == "arial.ttf":
+                title_font = ImageFont.truetype(path, 45)
+                date_font = ImageFont.truetype(path, 30)
+                break
+        except:
+            continue
+            
+    if not title_font:
+        title_font = ImageFont.load_default()
+        date_font = ImageFont.load_default()
+
+    # Draw Title
+    title_w = draw.textlength(title, font=title_font) if hasattr(draw, 'textlength') else 100
+    draw.text(((width - title_w)/2, height/3), title, fill=(236, 240, 241), font=title_font)
+    
+    # Draw Date
+    date_w = draw.textlength(date_str, font=date_font) if hasattr(draw, 'textlength') else 100
+    draw.text(((width - date_w)/2, height/2), date_str, fill=(189, 195, 199), font=date_font)
+    
+    # Draw a simple accent line
+    draw.rectangle([width/4, height/2.5, 3*width/4, height/2.5 + 5], fill=(52, 152, 219))
+
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='JPEG', quality=90)
+    return img_byte_arr.getvalue()
+
 def create_epub(articles):
     date_str = datetime.date.today().strftime("%B %d, %Y")
     filename = f"Daily_Digest_{datetime.date.today().isoformat()}.epub"
@@ -332,6 +377,14 @@ def create_epub(articles):
     
     has_korean = any(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['content']) for art in articles)
     book.set_language('ko' if has_korean else 'en')
+    
+    # Set Cover
+    if os.path.exists('cover.jpg'):
+        with open('cover.jpg', 'rb') as f:
+            book.set_cover("cover.jpg", f.read())
+    else:
+        cover_content = generate_cover_image("Daily Digest", date_str)
+        book.set_cover("cover.jpg", cover_content)
     
     style_item = epub.EpubItem(uid="style_default", file_name="style/default.css", media_type="text/css", content=DEFAULT_STYLE)
     book.add_item(style_item)
