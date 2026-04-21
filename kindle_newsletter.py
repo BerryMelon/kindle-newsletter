@@ -122,15 +122,26 @@ def strip_emojis(text):
 
 def summarize_content(text, is_korean):
     """Generate a concise summary using Gemini API."""
-    if not gen_model or not text or len(text) < 300:
+    if not GEMINI_API_KEY:
+        print("Skipping summary: GEMINI_API_KEY not found.")
+        return None
+        
+    if not gen_model:
+        print("Skipping summary: gen_model not initialized.")
+        return None
+
+    if not text or len(text) < 300:
+        print(f"Skipping summary: Content too short ({len(text) if text else 0} chars).")
         return None
     
     # Remove HTML tags for the AI prompt
     clean_text = re.sub('<[^<]+?>', '', text).strip()
-    # Truncate if too long (gemini flash handles 1M tokens but we want to be efficient)
+    # Truncate if too long
     clean_text = clean_text[:8000]
 
     lang_instr = "Korean" if is_korean else "English"
+    print(f"Requesting AI summary for {lang_instr} article ({len(clean_text)} chars)...")
+    
     prompt = f"""
     You are an expert editor for a daily newsletter digest. 
     Provide a concise, high-level summary of the following article in exactly 3 bullet points.
@@ -147,6 +158,7 @@ def summarize_content(text, is_korean):
             summary = response.text.strip()
             # Basic cleanup: remove markdown asterisks if present
             summary = summary.replace('* ', '• ').replace('- ', '• ')
+            print("Successfully generated AI summary.")
             return summary
     except Exception as e:
         print(f"Gemini summarization failed: {e}")
