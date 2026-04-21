@@ -420,7 +420,7 @@ def create_epub(articles):
     return filename
 
 def send_emails(filepath):
-    recipients = [KINDLE_EMAIL, GMAIL_USER]
+    recipients = [KINDLE_EMAIL]
     for recipient in recipients:
         msg = EmailMessage()
         msg['Subject'] = f'Daily Digest - {datetime.date.today().isoformat()}'
