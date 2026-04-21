@@ -5,11 +5,15 @@ import email
 import requests
 import hashlib
 import re
+import io
+import time
 from email.message import EmailMessage
 from imapclient import IMAPClient
 from readability import Document
 from ebooklib import epub
 from lxml import html
+from PIL import Image
+
 try:
     from lxml.html.clean import Cleaner
 except ImportError:
@@ -47,6 +51,63 @@ def strip_emojis(text):
     if not text: return ""
     return re.sub(r'[^\u0000-\uFFFF]', '', text)
 
+def fetch_with_retry(url, retries=3, timeout=10):
+    """Fetch URL with retries and basic error handling."""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    for i in range(retries):
+        try:
+            res = requests.get(url, timeout=timeout, headers=headers)
+            res.raise_for_status()
+            return res.content, res.headers.get('Content-Type', 'image/jpeg')
+        except Exception as e:
+            if i == retries - 1:
+                print(f"Final attempt failed for {url}: {e}")
+            else:
+                time.sleep(1)
+    return None, None
+
+def advanced_cleanup(tree):
+    """Remove common newsletter noise like social icons and unsubscribe links."""
+    noise_patterns = [
+        'unsubscribe', 'view in browser', 'manage preferences', 'privacy policy',
+        'update profile', 'email preferences', 'terms of service', 'copyright',
+        'all rights reserved', 'click here to view'
+    ]
+    
+    noise_domains = [
+        'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 
+        'youtube.com', 'pinterest.com', 'plus.google.com', 'tiktok.com'
+    ]
+
+    # Remove links containing noise keywords or domains
+    for link in tree.xpath('//a'):
+        href = link.get('href', '').lower()
+        text = link.text_content().lower()
+        
+        if any(p in text for p in noise_patterns) or any(d in href for d in noise_domains):
+            parent = link.getparent()
+            if parent is not None:
+                link.getparent().remove(link)
+                # If parent is now empty (or only whitespace), try to remove it too
+                if not parent.text_content().strip() and not parent.xpath('.//img'):
+                    try:
+                        parent.getparent().remove(parent)
+                    except:
+                        pass
+
+    # Remove common social media icons
+    for img in tree.xpath('//img'):
+        alt = (img.get('alt') or '').lower()
+        src = (img.get('src') or '').lower()
+        if any(social in alt for social in ['facebook', 'twitter', 'linkedin', 'instagram', 'youtube', 'rss']) or \
+           any(social in src for social in ['facebook', 'twitter', 'linkedin', 'instagram', 'youtube']):
+            try:
+                img.getparent().remove(img)
+            except:
+                pass
+
+    return tree
+
 def clean_html_safe(raw_html):
     """Fallback cleaner for newsletters that Readability fails on."""
     if Cleaner is None:
@@ -56,7 +117,7 @@ def clean_html_safe(raw_html):
         scripts=True,
         javascript=True,
         comments=True,
-        style=True,      # Strip ALL inline styles to prevent clipping/overflow issues
+        style=True,
         links=False,
         meta=True,
         page_structure=False,
@@ -65,30 +126,29 @@ def clean_html_safe(raw_html):
         frames=True,
         forms=True,
         annoying_tags=True,
-        remove_tags=['span', 'font', 'div'] # Flatten unnecessary wrappers
+        remove_tags=['span', 'font', 'div']
     )
     
     try:
         parser = html.HTMLParser(encoding='utf-8')
         tree = html.fromstring(raw_html.encode('utf-8'), parser=parser)
         
-        # Remove spacer rows/cells that often cause weird layout issues
+        # Remove spacer rows/cells
         for node in tree.xpath('//td[@height] | //tr[@height]'):
             h = node.get('height')
             if h and h.isdigit() and int(h) < 30:
-                text = node.text_content().strip()
-                if not text:
+                if not node.text_content().strip():
                     node.getparent().remove(node)
 
-        # Strip width/height/bgcolor attributes to let Kindle handle the flow
+        # Strip layout attributes
         for tag in tree.xpath('//table | //td | //tr | //th | //img'):
             for attr in ['width', 'height', 'style', 'bgcolor', 'background', 'valign', 'align']:
                 if attr in tag.attrib:
-                    # Keep width/height on images if they are reasonably large, but better to let CSS handle it
                     if tag.tag == 'img' and attr in ['width', 'height']:
                         continue
                     del tag.attrib[attr]
 
+        tree = advanced_cleanup(tree)
         cleaned_node = cleaner.clean_html(tree)
         return html.tostring(cleaned_node, encoding='unicode', method='html')
     except Exception as e:
@@ -172,35 +232,44 @@ def process_images(book, html_str, cid_images):
                 img.getparent().remove(img)
                 continue
                 
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-                res = requests.get(target_url, timeout=10, headers=headers)
-                if res.status_code == 200:
-                    img_data = res.content
-                    img_type = res.headers.get('Content-Type', 'image/jpeg')
-            except Exception as e:
-                print(f"Failed image download {target_url}: {e}")
+            img_data, img_type = fetch_with_retry(target_url)
 
         if img_data:
-            if len(img_data) < 40:
+            try:
+                # Use PIL to validate and potentially convert image
+                pil_img = Image.open(io.BytesIO(img_data))
+                
+                # Convert to RGB if necessary (Kindle likes RGB JPEG/PNG)
+                if pil_img.mode in ("RGBA", "P"):
+                    pil_img = pil_img.convert("RGB")
+                
+                # Resize if too large
+                max_width = 800
+                if pil_img.width > max_width:
+                    ratio = max_width / float(pil_img.width)
+                    new_height = int(float(pil_img.height) * ratio)
+                    pil_img = pil_img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Save as JPEG for best compatibility
+                output = io.BytesIO()
+                pil_img.save(output, format='JPEG', quality=85)
+                img_data = output.getvalue()
+                m_type, ext = 'image/jpeg', 'jpg'
+                
+                img_filename = f"images/img_{IMAGE_ID_COUNTER}.{ext}"
+                epub_img = epub.EpubItem(
+                    uid=f"img_{IMAGE_ID_COUNTER}",
+                    file_name=img_filename,
+                    media_type=m_type,
+                    content=img_data
+                )
+                book.add_item(epub_img)
+                img.set('src', f"../{img_filename}")
+                IMAGE_ID_COUNTER += 1
+                print(f"Added image: {img_filename} ({pil_img.width}x{pil_img.height})")
+            except Exception as e:
+                print(f"Image processing failed for {target_url}: {e}")
                 img.getparent().remove(img)
-                continue
-
-            if 'png' in img_type.lower(): m_type, ext = 'image/png', 'png'
-            elif 'gif' in img_type.lower(): m_type, ext = 'image/gif', 'gif'
-            elif 'webp' in img_type.lower(): m_type, ext = 'image/webp', 'webp'
-            else: m_type, ext = 'image/jpeg', 'jpg'
-            
-            img_filename = f"images/img_{IMAGE_ID_COUNTER}.{ext}"
-            epub_img = epub.EpubItem(
-                uid=f"img_{IMAGE_ID_COUNTER}",
-                file_name=img_filename,
-                media_type=m_type,
-                content=img_data
-            )
-            book.add_item(epub_img)
-            img.set('src', f"../{img_filename}")
-            IMAGE_ID_COUNTER += 1
         else:
             img.getparent().remove(img)
             
@@ -232,8 +301,13 @@ def process_newsletters():
             if (len(content) < 600 and len(raw_html) > 3000) or len(plain_text) < 100:
                 print(f"Readability failed for '{title}', using safe cleaner fallback.")
                 content = clean_html_safe(raw_html)
+            else:
+                # Even if Readability works, run advanced cleanup on the result
+                parser = html.HTMLParser(encoding='utf-8')
+                tree = html.fromstring(content.encode('utf-8'), parser=parser)
+                tree = advanced_cleanup(tree)
+                content = html.tostring(tree, encoding='unicode', method='html')
             
-            # Strip emojis from content
             content = strip_emojis(content)
             title = strip_emojis(title)
             
@@ -264,10 +338,21 @@ def create_epub(articles):
 
     chapters = []
     for i, art in enumerate(articles):
+        # Process images and ensure valid internal structure
         processed_content = process_images(book, art['content'], art['cid_images'])
         
+        # Strip potential full html tags from processed_content to avoid nesting
+        if '<body' in processed_content:
+            try:
+                tree = html.fromstring(processed_content)
+                body = tree.find('.//body')
+                if body is not None:
+                    processed_content = ''.join([html.tostring(child, encoding='unicode') for child in body])
+            except:
+                pass
+
         chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if has_korean else 'en')
-        chapter.content = f"<h1>{art['title']}</h1><p style='text-align:center'><small>From: {art['sender']}</small></p>{processed_content}"
+        chapter.content = f"<h1>{art['title']}</h1><p style='text-align:center'><small>From: {art['sender']}</small></p><div>{processed_content}</div>"
         chapter.add_item(style_item)
         
         book.add_item(chapter)

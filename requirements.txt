@@ -4,3 +4,4 @@ ebooklib
 lxml
 lxml_html_clean
 requests
+Pillow
