@@ -551,10 +551,11 @@ def create_epub(articles):
         summary_html = ""
         if art['summary']:
             sum_title = "요약" if is_korean else "Key Takeaways"
+            formatted_summary = art['summary'].replace('\n', '<br/>')
             summary_html = f"""
                 <div class="summary-box">
                     <div class="summary-title">{sum_title}</div>
-                    <div class="summary-text">{art['summary'].replace('\n', '<br/>')}</div>
+                    <div class="summary-text">{formatted_summary}</div>
                 </div>
             """
 
