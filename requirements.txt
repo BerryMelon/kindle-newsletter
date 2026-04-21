@@ -5,3 +5,4 @@ lxml
 lxml_html_clean
 requests
 Pillow
+google-generativeai

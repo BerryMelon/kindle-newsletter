@@ -13,6 +13,7 @@ from readability import Document
 from ebooklib import epub
 from lxml import html
 from PIL import Image, ImageDraw, ImageFont
+import google.generativeai as genai
 
 try:
     from lxml.html.clean import Cleaner
@@ -24,8 +25,16 @@ except ImportError:
 GMAIL_USER = os.getenv('GMAIL_USER')
 GMAIL_APP_PASS = os.getenv('GMAIL_APP_PASSWORD')
 KINDLE_EMAIL = os.getenv('KINDLE_EMAIL')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 SOURCE_LABEL = 'Daily-Digest'
 PROCESSED_LABEL = 'Daily-Digest/Processed'
+
+# Initialize Gemini if key is provided
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gen_model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    gen_model = None
 
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
@@ -79,6 +88,29 @@ pre {
     white-space: pre-wrap;
     word-wrap: break-word;
 }
+
+/* AI Summary Box */
+.summary-box {
+    background-color: #fdfdfd;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 25px;
+}
+.summary-title {
+    font-weight: bold;
+    font-size: 0.9em;
+    color: #2980b9;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.summary-text {
+    font-size: 0.95em;
+    color: #444;
+    margin: 0;
+    line-height: 1.4;
+}
 '''
 
 IMAGE_ID_COUNTER = 0
@@ -87,6 +119,38 @@ def strip_emojis(text):
     """Remove characters outside the Basic Multilingual Plane (emojis)."""
     if not text: return ""
     return re.sub(r'[^\u0000-\uFFFF]', '', text)
+
+def summarize_content(text, is_korean):
+    """Generate a concise summary using Gemini API."""
+    if not gen_model or not text or len(text) < 300:
+        return None
+    
+    # Remove HTML tags for the AI prompt
+    clean_text = re.sub('<[^<]+?>', '', text).strip()
+    # Truncate if too long (gemini flash handles 1M tokens but we want to be efficient)
+    clean_text = clean_text[:8000]
+
+    lang_instr = "Korean" if is_korean else "English"
+    prompt = f"""
+    You are an expert editor for a daily newsletter digest. 
+    Provide a concise, high-level summary of the following article in exactly 3 bullet points.
+    Output ONLY the 3 bullet points, nothing else.
+    IMPORTANT: Provide the summary in {lang_instr} because the original text is in {lang_instr}.
+    
+    Text: {clean_text}
+    """
+    
+    try:
+        response = gen_model.generate_content(prompt)
+        if response and response.text:
+            # Convert bullet points to HTML-safe list
+            summary = response.text.strip()
+            # Basic cleanup: remove markdown asterisks if present
+            summary = summary.replace('* ', '• ').replace('- ', '• ')
+            return summary
+    except Exception as e:
+        print(f"Gemini summarization failed: {e}")
+    return None
 
 def fetch_with_retry(url, retries=3, timeout=10):
     """Fetch URL with retries and basic error handling."""
@@ -348,11 +412,19 @@ def process_newsletters():
             content = strip_emojis(content)
             title = strip_emojis(title)
             
+            # Detect language for AI summarization
+            is_korean = bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', content))
+            
+            # Generate AI Summary
+            summary = summarize_content(content, is_korean)
+            
             articles.append({
                 'title': title,
                 'content': content,
                 'cid_images': cid_images,
-                'sender': sender
+                'sender': sender,
+                'summary': summary,
+                'is_korean': is_korean
             })
             client.copy(msgid, PROCESSED_LABEL)
             client.delete_messages(msgid)
@@ -416,15 +488,11 @@ def apply_dropcap(content, is_korean):
         for p in tree.xpath('//p'):
             text = p.text_content().strip()
             if text and text[0].isalpha():
-                # We need to manually inject the span for the first letter
-                # This is tricky with lxml if there's nested HTML (like <strong>)
-                # For simplicity, we'll try to handle the most common case
                 raw_p = html.tostring(p, encoding='unicode')
                 # Find the first letter after <p...>
                 match = re.search(r'(<p[^>]*>)(?:\s*)([a-zA-Z])', raw_p)
                 if match:
                     new_p = raw_p[:match.start(2)] + f'<span class="dropcap">{match.group(2)}</span>' + raw_p[match.end(2):]
-                    # Create a new paragraph node from the string and replace the old one
                     new_p_node = html.fromstring(new_p)
                     p.getparent().replace(p, new_p_node)
                     break
@@ -441,7 +509,7 @@ def create_epub(articles):
     book.set_identifier(f'digest-{datetime.date.today().isoformat()}')
     book.set_title(f'Daily Digest - {date_str}')
     
-    has_korean = any(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['content']) for art in articles)
+    has_korean = any(art['is_korean'] for art in articles)
     book.set_language('ko' if has_korean else 'en')
     
     # Set Cover
@@ -457,8 +525,7 @@ def create_epub(articles):
 
     chapters = []
     for i, art in enumerate(articles):
-        # Check if this specific article is Korean
-        is_korean = bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['content']))
+        is_korean = art['is_korean']
         
         # Process images and ensure valid internal structure
         processed_content = process_images(book, art['content'], art['cid_images'])
@@ -480,12 +547,24 @@ def create_epub(articles):
         sender_match = re.search(r'([^<]+)', art['sender'])
         sender_name = sender_match.group(1).strip() if sender_match else art['sender']
         
+        # Prepare Summary Section
+        summary_html = ""
+        if art['summary']:
+            sum_title = "요약" if is_korean else "Key Takeaways"
+            summary_html = f"""
+                <div class="summary-box">
+                    <div class="summary-title">{sum_title}</div>
+                    <div class="summary-text">{art['summary'].replace('\n', '<br/>')}</div>
+                </div>
+            """
+
         chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if is_korean else 'en')
         chapter.content = f"""
             <h1>{art['title']}</h1>
             <div class="metadata">
                 From: <strong>{sender_name}</strong>
             </div>
+            {summary_html}
             <div>{processed_content}</div>
         """
         chapter.add_item(style_item)
