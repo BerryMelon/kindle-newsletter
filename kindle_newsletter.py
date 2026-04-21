@@ -13,7 +13,7 @@ from readability import Document
 from ebooklib import epub
 from lxml import html
 from PIL import Image, ImageDraw, ImageFont
-import google.generativeai as genai
+from google import genai
 
 try:
     from lxml.html.clean import Cleaner
@@ -29,12 +29,11 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 SOURCE_LABEL = 'Daily-Digest'
 PROCESSED_LABEL = 'Daily-Digest/Processed'
 
-# Initialize Gemini if key is provided
+# Initialize Gemini Client if key is provided
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gen_model = genai.GenerativeModel('gemini-1.5-flash')
+    ai_client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    gen_model = None
+    ai_client = None
 
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
@@ -121,13 +120,13 @@ def strip_emojis(text):
     return re.sub(r'[^\u0000-\uFFFF]', '', text)
 
 def summarize_content(text, is_korean):
-    """Generate a concise summary using Gemini API."""
+    """Generate a concise summary using Gemini API (via google-genai)."""
     if not GEMINI_API_KEY:
         print("Skipping summary: GEMINI_API_KEY not found.")
         return None
         
-    if not gen_model:
-        print("Skipping summary: gen_model not initialized.")
+    if not ai_client:
+        print("Skipping summary: ai_client not initialized.")
         return None
 
     if not text or len(text) < 300:
@@ -152,11 +151,14 @@ def summarize_content(text, is_korean):
     """
     
     try:
-        response = gen_model.generate_content(prompt)
+        response = ai_client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
         if response and response.text:
-            # Convert bullet points to HTML-safe list
+            # Convert bullet points to HTML-safe format
             summary = response.text.strip()
-            # Basic cleanup: remove markdown asterisks if present
+            # Basic cleanup: standardize bullet points
             summary = summary.replace('* ', '• ').replace('- ', '• ')
             print("Successfully generated AI summary.")
             return summary
