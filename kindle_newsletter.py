@@ -151,19 +151,31 @@ def summarize_content(text, is_korean):
     """
     
     try:
+        # Try gemini-1.5-flash-latest which is often more compatible
         response = ai_client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-1.5-flash-latest",
             contents=prompt
         )
         if response and response.text:
-            # Convert bullet points to HTML-safe format
             summary = response.text.strip()
-            # Basic cleanup: standardize bullet points
             summary = summary.replace('* ', '• ').replace('- ', '• ')
             print("Successfully generated AI summary.")
             return summary
     except Exception as e:
-        print(f"Gemini summarization failed: {e}")
+        print(f"Gemini summarization failed with primary model: {e}")
+        # Final fallback to standard gemini-1.5-flash
+        try:
+            response = ai_client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt
+            )
+            if response and response.text:
+                summary = response.text.strip()
+                summary = summary.replace('* ', '• ').replace('- ', '• ')
+                print("Successfully generated AI summary (fallback model).")
+                return summary
+        except Exception as e2:
+            print(f"Gemini summarization failed with fallback model: {e2}")
     return None
 
 def fetch_with_retry(url, retries=3, timeout=10):
