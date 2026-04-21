@@ -29,19 +29,56 @@ PROCESSED_LABEL = 'Daily-Digest/Processed'
 
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
-body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; line-height: 1.5; margin: 10px; }
-h1 { text-align: center; font-size: 1.4em; margin-bottom: 0.5em; }
-h2 { font-size: 1.2em; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 20px; }
-h3 { font-size: 1.1em; margin-top: 15px; }
-p { margin-bottom: 1em; text-align: justify; }
+body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; line-height: 1.5; margin: 10px; color: #333; }
+h1 { text-align: center; font-size: 1.6em; margin-bottom: 0.2em; color: #000; }
+.metadata { text-align: center; font-size: 0.9em; color: #666; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+h2 { font-size: 1.3em; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 25px; }
+h3 { font-size: 1.15em; margin-top: 20px; }
+p { margin-bottom: 1.2em; text-align: justify; }
 img { 
     max-width: 100%; 
     height: auto; 
     display: block; 
-    margin: 15px auto; 
+    margin: 20px auto; 
 }
-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-td { padding: 5px; border-bottom: 1px solid #eee; }
+table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+td { padding: 8px; border-bottom: 1px solid #eee; }
+
+/* Magazine Style Typography */
+.dropcap {
+    float: left;
+    font-size: 3.5em;
+    line-height: 0.8;
+    margin: 0.1em 0.1em 0 0;
+    color: #2c3e50;
+    font-weight: bold;
+}
+
+blockquote {
+    margin: 20px 10px;
+    padding: 10px 20px;
+    border-left: 4px solid #3498db;
+    background-color: #f9f9f9;
+    font-style: italic;
+    color: #555;
+}
+
+code, pre {
+    font-family: "Courier New", Courier, monospace;
+    background-color: #f4f4f4;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+pre {
+    display: block;
+    padding: 15px;
+    margin: 15px 0;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
 '''
 
 IMAGE_ID_COUNTER = 0
@@ -367,6 +404,35 @@ def generate_cover_image(title, date_str):
     image.save(img_byte_arr, format='JPEG', quality=90)
     return img_byte_arr.getvalue()
 
+def apply_dropcap(content, is_korean):
+    """Apply dropcap to the first letter of English articles only."""
+    if is_korean: return content
+    
+    try:
+        parser = html.HTMLParser(encoding='utf-8')
+        tree = html.fromstring(content.encode('utf-8'), parser=parser)
+        
+        # Find the first paragraph with text
+        for p in tree.xpath('//p'):
+            text = p.text_content().strip()
+            if text and text[0].isalpha():
+                # We need to manually inject the span for the first letter
+                # This is tricky with lxml if there's nested HTML (like <strong>)
+                # For simplicity, we'll try to handle the most common case
+                raw_p = html.tostring(p, encoding='unicode')
+                # Find the first letter after <p...>
+                match = re.search(r'(<p[^>]*>)(?:\s*)([a-zA-Z])', raw_p)
+                if match:
+                    new_p = raw_p[:match.start(2)] + f'<span class="dropcap">{match.group(2)}</span>' + raw_p[match.end(2):]
+                    # Create a new paragraph node from the string and replace the old one
+                    new_p_node = html.fromstring(new_p)
+                    p.getparent().replace(p, new_p_node)
+                    break
+        return html.tostring(tree, encoding='unicode', method='html')
+    except Exception as e:
+        print(f"Dropcap failed: {e}")
+        return content
+
 def create_epub(articles):
     date_str = datetime.date.today().strftime("%B %d, %Y")
     filename = f"Daily_Digest_{datetime.date.today().isoformat()}.epub"
@@ -391,6 +457,9 @@ def create_epub(articles):
 
     chapters = []
     for i, art in enumerate(articles):
+        # Check if this specific article is Korean
+        is_korean = bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['content']))
+        
         # Process images and ensure valid internal structure
         processed_content = process_images(book, art['content'], art['cid_images'])
         
@@ -404,8 +473,21 @@ def create_epub(articles):
             except:
                 pass
 
-        chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if has_korean else 'en')
-        chapter.content = f"<h1>{art['title']}</h1><p style='text-align:center'><small>From: {art['sender']}</small></p><div>{processed_content}</div>"
+        # Apply typography improvements
+        processed_content = apply_dropcap(processed_content, is_korean)
+
+        # Build smart metadata header
+        sender_match = re.search(r'([^<]+)', art['sender'])
+        sender_name = sender_match.group(1).strip() if sender_match else art['sender']
+        
+        chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if is_korean else 'en')
+        chapter.content = f"""
+            <h1>{art['title']}</h1>
+            <div class="metadata">
+                From: <strong>{sender_name}</strong>
+            </div>
+            <div>{processed_content}</div>
+        """
         chapter.add_item(style_item)
         
         book.add_item(chapter)
