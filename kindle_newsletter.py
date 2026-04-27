@@ -46,20 +46,20 @@ else:
 
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
-body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; line-height: 1.5; margin: 10px; color: #333; }
-h1 { text-align: center; font-size: 1.6em; margin-bottom: 0.2em; color: #000; }
-.metadata { text-align: center; font-size: 0.9em; color: #666; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
-h2 { font-size: 1.3em; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 25px; }
-h3 { font-size: 1.15em; margin-top: 20px; }
-p { margin-bottom: 1.2em; text-align: justify; }
+body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; line-height: 1.6; margin: 10px; color: #000; background-color: #fff; }
+h1 { text-align: center; font-size: 1.7em; margin-bottom: 0.2em; color: #000; }
+.metadata { text-align: center; font-size: 0.9em; color: #444; margin-bottom: 20px; border-bottom: 2px solid #000; padding-bottom: 15px; }
+h2 { font-size: 1.4em; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 30px; }
+h3 { font-size: 1.2em; margin-top: 25px; }
+p { margin-bottom: 1.3em; text-align: justify; }
 img { 
     max-width: 100%; 
     height: auto; 
     display: block; 
     margin: 20px auto; 
 }
-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-td { padding: 8px; border-bottom: 1px solid #eee; }
+table { width: 100%; border-collapse: collapse; margin: 15px 0; border: 1px solid #000; }
+td { padding: 8px; border-bottom: 1px solid #ccc; }
 
 /* Magazine Style Typography */
 .dropcap {
@@ -67,23 +67,24 @@ td { padding: 8px; border-bottom: 1px solid #eee; }
     font-size: 3.5em;
     line-height: 0.8;
     margin: 0.1em 0.1em 0 0;
-    color: #2c3e50;
+    color: #000;
     font-weight: bold;
 }
 
 blockquote {
     margin: 20px 10px;
     padding: 10px 20px;
-    border-left: 4px solid #3498db;
-    background-color: #f9f9f9;
+    border-left: 5px solid #000;
+    background-color: transparent;
     font-style: italic;
-    color: #555;
+    color: #222;
 }
 
 code, pre {
     font-family: "Courier New", Courier, monospace;
-    background-color: #f4f4f4;
+    background-color: transparent;
     padding: 2px 4px;
+    border: 1px solid #333;
     border-radius: 3px;
     font-size: 0.9em;
 }
@@ -99,26 +100,49 @@ pre {
 
 /* AI Summary Box */
 .summary-box {
-    background-color: #fdfdfd;
-    border: 1px solid #ddd;
-    border-radius: 5px;
+    background-color: transparent;
+    border: 2px solid #000;
+    border-radius: 8px;
     padding: 15px;
-    margin-bottom: 25px;
+    margin-bottom: 30px;
 }
 .summary-title {
     font-weight: bold;
-    font-size: 0.9em;
-    color: #2980b9;
-    margin-bottom: 8px;
+    font-size: 1em;
+    color: #000;
+    margin-bottom: 10px;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 1.5px;
+    border-bottom: 1px solid #000;
+    display: inline-block;
 }
 .summary-text {
-    font-size: 0.95em;
-    color: #444;
+    font-size: 1em;
+    color: #111;
     margin: 0;
-    line-height: 1.4;
+    line-height: 1.5;
 }
+
+/* Dashboard Styles */
+.dashboard-article {
+    margin-bottom: 25px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #eee;
+}
+.dashboard-title { font-size: 1.3em; font-weight: bold; margin-bottom: 5px; }
+.dashboard-link { text-decoration: none; color: #000; }
+.dashboard-meta { font-size: 0.9em; color: #555; margin-bottom: 10px; }
+.dashboard-summary { font-size: 0.95em; line-height: 1.4; color: #222; font-style: italic; }
+
+/* Navigation Footer */
+.nav-footer {
+    margin-top: 50px;
+    padding-top: 20px;
+    border-top: 2px solid #000;
+    text-align: center;
+    font-size: 1.1em;
+}
+.nav-link { margin: 0 15px; text-decoration: none; font-weight: bold; color: #000; }
 '''
 
 IMAGE_ID_COUNTER = 0
@@ -127,6 +151,17 @@ def strip_emojis(text):
     """Remove characters outside the Basic Multilingual Plane (emojis)."""
     if not text: return ""
     return re.sub(r'[^\u0000-\uFFFF]', '', text)
+
+def estimate_reading_time(html_content):
+    """Estimate reading time in minutes based on word count (approx 225 WPM)."""
+    if not html_content: return 0
+    # Strip HTML tags
+    text = re.sub('<[^<]+?>', '', html_content)
+    # Count words
+    word_count = len(text.split())
+    # For CJK languages, word count by spaces is inaccurate, but this is a reasonable heuristic for newsletters
+    minutes = max(1, round(word_count / 225))
+    return minutes
 
 def summarize_content(text, is_korean):
     """Generate a concise summary using Gemini API (via google-genai)."""
@@ -459,7 +494,8 @@ def process_newsletters():
                 'cid_images': cid_images,
                 'sender': sender,
                 'summary': summary,
-                'is_korean': is_korean
+                'is_korean': is_korean,
+                'reading_time': estimate_reading_time(content)
             })
             client.copy(msgid, PROCESSED_LABEL)
             client.delete_messages(msgid)
@@ -558,7 +594,29 @@ def create_epub(articles):
     style_item = epub.EpubItem(uid="style_default", file_name="style/default.css", media_type="text/css", content=DEFAULT_STYLE)
     book.add_item(style_item)
 
-    chapters = []
+    # 1. Create Dashboard (Front Page)
+    dashboard = epub.EpubHtml(title="Daily Dashboard", file_name='text/dashboard.xhtml', lang='ko' if has_korean else 'en')
+    dash_html = f"<h1>Daily Digest Dashboard</h1><p class='metadata'>{date_str}</p>"
+    
+    for i, art in enumerate(articles):
+        sender_match = re.search(r'([^<]+)', art['sender'])
+        sender_name = sender_match.group(1).strip() if sender_match else art['sender']
+        
+        summary_snippet = art['summary'].split('\n')[0] if art['summary'] else "No summary available."
+        if summary_snippet.startswith('• '): summary_snippet = summary_snippet[2:]
+        
+        dash_html += f"""
+            <div class="dashboard-article">
+                <div class="dashboard-title"><a href="chap_{i}.xhtml" class="dashboard-link">{art['title']}</a></div>
+                <div class="dashboard-meta">From: {sender_name} | {art['reading_time']} min read</div>
+                <div class="dashboard-summary">{summary_snippet}</div>
+            </div>
+        """
+    dashboard.content = dash_html
+    dashboard.add_item(style_item)
+    book.add_item(dashboard)
+
+    chapters = [dashboard]
     for i, art in enumerate(articles):
         is_korean = art['is_korean']
         
@@ -594,14 +652,24 @@ def create_epub(articles):
                 </div>
             """
 
+        # Navigation Footer
+        next_link = f'<a href="chap_{i+1}.xhtml" class="nav-link">Next Article →</a>' if i < len(articles) - 1 else ''
+        nav_footer = f"""
+            <div class="nav-footer">
+                <a href="dashboard.xhtml" class="nav-link">← Back to Dashboard</a>
+                {next_link}
+            </div>
+        """
+
         chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if is_korean else 'en')
         chapter.content = f"""
             <h1>{art['title']}</h1>
             <div class="metadata">
-                From: <strong>{sender_name}</strong>
+                From: <strong>{sender_name}</strong> | {art['reading_time']} min read
             </div>
             {summary_html}
             <div>{processed_content}</div>
+            {nav_footer}
         """
         chapter.add_item(style_item)
         
