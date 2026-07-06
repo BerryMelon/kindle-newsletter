@@ -21,4 +21,6 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           KINDLE_EMAIL: ${{ secrets.KINDLE_EMAIL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          USER_LOCATION: ${{ secrets.USER_LOCATION }}
+          DEBUG: ${{ secrets.DEBUG }}
         run: python kindle_newsletter.py

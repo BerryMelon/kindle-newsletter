@@ -28,6 +28,76 @@ KINDLE_EMAIL = os.getenv('KINDLE_EMAIL')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 SOURCE_LABEL = 'Daily-Digest'
 PROCESSED_LABEL = 'Daily-Digest/Processed'
+DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
+USER_LOCATION = os.getenv('USER_LOCATION')
+
+def fetch_weather(location):
+    """Fetch current weather for a city using Open-Meteo API."""
+    if not location:
+        return None
+    try:
+        print(f"Fetching weather coordinates for {location}...")
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={requests.utils.quote(location)}&count=1&language=en&format=json"
+        geo_res = requests.get(geo_url, timeout=10)
+        geo_res.raise_for_status()
+        geo_data = geo_res.json()
+        if not geo_data.get('results'):
+            print(f"No geocoding results found for {location}")
+            return None
+        
+        result = geo_data['results'][0]
+        lat = result['latitude']
+        lon = result['longitude']
+        resolved_name = result.get('name', location)
+        country = result.get('country_code', '')
+        location_str = f"{resolved_name}, {country.upper()}" if country else resolved_name
+        
+        print(f"Resolved coordinates: {lat}, {lon}. Fetching weather...")
+        is_us = country.upper() == 'US'
+        temp_unit = "fahrenheit" if is_us else "celsius"
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,apparent_temperature,weather_code&temperature_unit={temp_unit}"
+        
+        weather_res = requests.get(weather_url, timeout=10)
+        weather_res.raise_for_status()
+        weather_data = weather_res.json()
+        current = weather_data.get('current', {})
+        temp = round(current.get('temperature_2m', 0))
+        code = current.get('weather_code', 0)
+        
+        weather_icons = {
+            0: ("☀️", "Clear"),
+            1: ("🌤️", "Mainly Clear"),
+            2: ("⛅", "Partly Cloudy"),
+            3: ("☁️", "Overcast"),
+            45: ("🌫️", "Fog"),
+            48: ("🌫️", "Depositing Rime Fog"),
+            51: ("🌧️", "Light Drizzle"),
+            53: ("🌧️", "Moderate Drizzle"),
+            55: ("🌧️", "Heavy Drizzle"),
+            61: ("🌧️", "Slight Rain"),
+            63: ("🌧️", "Moderate Rain"),
+            65: ("🌧️", "Heavy Rain"),
+            71: ("❄️", "Slight Snow"),
+            73: ("❄️", "Moderate Snow"),
+            75: ("❄️", "Heavy Snow"),
+            77: ("❄️", "Snow Grains"),
+            80: ("🌦️", "Slight Rain Showers"),
+            81: ("🌦️", "Moderate Rain Showers"),
+            82: ("🌦️", "Violent Rain Showers"),
+            85: ("❄️", "Slight Snow Showers"),
+            86: ("❄️", "Heavy Snow Showers"),
+            95: ("⛈️", "Thunderstorm"),
+            96: ("⛈️", "Thunderstorm with Hail"),
+            99: ("⛈️", "Thunderstorm with Heavy Hail")
+        }
+        
+        icon, desc = weather_icons.get(code, ("☁️", "Cloudy"))
+        unit_symbol = "°F" if is_us else "°C"
+        return f"{location_str}: {icon} {temp}{unit_symbol} ({desc})"
+    except Exception as e:
+        print(f"Failed to fetch weather: {e}")
+        return None
+
 
 # Initialize Gemini Client if key is provided
 if GEMINI_API_KEY:
@@ -46,12 +116,35 @@ else:
 
 DEFAULT_STYLE = '''
 @page { margin: 5pt; }
-body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; line-height: 1.6; margin: 10px; color: #000; background-color: #fff; }
-h1 { text-align: center; font-size: 1.7em; margin-bottom: 0.2em; color: #000; }
-.metadata { text-align: center; font-size: 0.9em; color: #444; margin-bottom: 20px; border-bottom: 2px solid #000; padding-bottom: 15px; }
-h2 { font-size: 1.4em; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 30px; }
+body { 
+    font-family: "Georgia", "Bookerly", "Malgun Gothic", "Nanum Gothic", serif; 
+    line-height: 1.6; 
+    margin: 10px; 
+    color: #000; 
+    background-color: #fff; 
+}
+h1 { text-align: center; font-size: 1.8em; margin-bottom: 0.2em; color: #000; font-family: "Georgia", serif; font-weight: bold; }
+.metadata { 
+    text-align: center; 
+    font-size: 0.95em; 
+    color: #000; 
+    margin-bottom: 20px; 
+    border-top: 1px solid #000;
+    border-bottom: 2px solid #000; 
+    padding: 8px 0; 
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+h2 { font-size: 1.4em; border-bottom: 1px solid #000; padding-bottom: 3px; margin-top: 30px; font-family: "Georgia", serif; }
 h3 { font-size: 1.2em; margin-top: 25px; }
-p { margin-bottom: 1.3em; text-align: justify; }
+p { 
+    margin-bottom: 1.3em; 
+    text-align: justify; 
+    text-justify: inter-word;
+    -webkit-hyphens: auto; 
+    -epub-hyphens: auto; 
+    hyphens: auto; 
+}
 img { 
     max-width: 100%; 
     height: auto; 
@@ -64,9 +157,36 @@ td { padding: 8px; border-bottom: 1px solid #ccc; }
 /* Magazine Style Typography */
 .dropcap {
     float: left;
-    font-size: 3.5em;
+    font-size: 3.2em;
     line-height: 0.8;
-    margin: 0.1em 0.1em 0 0;
+    margin: 0.1em 0.15em 0 0;
+    color: #000;
+    font-weight: bold;
+}
+
+.byline {
+    text-align: center;
+    font-size: 0.9em;
+    font-style: italic;
+    margin-top: -10px;
+    margin-bottom: 20px;
+    color: #333;
+}
+
+.ornament {
+    text-align: center;
+    font-size: 1.4em;
+    margin: 30px 0;
+    color: #000;
+}
+
+.web-link-box {
+    text-align: center;
+    margin: 25px 0;
+    font-size: 0.9em;
+}
+.web-link {
+    text-decoration: underline;
     color: #000;
     font-weight: bold;
 }
@@ -74,7 +194,7 @@ td { padding: 8px; border-bottom: 1px solid #ccc; }
 blockquote {
     margin: 20px 10px;
     padding: 10px 20px;
-    border-left: 5px solid #000;
+    border-left: 4px solid #000;
     background-color: transparent;
     font-style: italic;
     color: #222;
@@ -84,14 +204,13 @@ code, pre {
     font-family: "Courier New", Courier, monospace;
     background-color: transparent;
     padding: 2px 4px;
-    border: 1px solid #333;
-    border-radius: 3px;
+    border: 1px solid #000;
     font-size: 0.9em;
 }
 
 pre {
     display: block;
-    padding: 15px;
+    padding: 12px;
     margin: 15px 0;
     overflow-x: auto;
     white-space: pre-wrap;
@@ -101,48 +220,88 @@ pre {
 /* AI Summary Box */
 .summary-box {
     background-color: transparent;
-    border: 2px solid #000;
-    border-radius: 8px;
-    padding: 15px;
-    margin-bottom: 30px;
+    border: 1px solid #000;
+    padding: 12px;
+    margin-bottom: 25px;
 }
 .summary-title {
     font-weight: bold;
-    font-size: 1em;
+    font-size: 0.9em;
     color: #000;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     text-transform: uppercase;
     letter-spacing: 1.5px;
     border-bottom: 1px solid #000;
     display: inline-block;
 }
 .summary-text {
-    font-size: 1em;
+    font-size: 0.95em;
     color: #111;
     margin: 0;
     line-height: 1.5;
 }
 
-/* Dashboard Styles */
-.dashboard-article {
-    margin-bottom: 25px;
-    padding-bottom: 15px;
-    border-bottom: 1px solid #eee;
+/* Editorial / Morning Briefing Box */
+.editorial-box {
+    background-color: transparent;
+    border: 4px double #000;
+    padding: 15px;
+    margin-bottom: 30px;
 }
-.dashboard-title { font-size: 1.3em; font-weight: bold; margin-bottom: 5px; }
+.editorial-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    text-align: center;
+    color: #000;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-family: "Georgia", serif;
+}
+.editorial-text {
+    font-size: 1em;
+    color: #000;
+    margin: 0;
+    line-height: 1.6;
+    text-align: justify;
+    font-style: italic;
+}
+
+/* Dashboard Styles (grouped by newsletter publisher) */
+.publisher-section {
+    margin-top: 35px;
+    margin-bottom: 15px;
+}
+.publisher-header {
+    font-size: 1.4em;
+    font-weight: bold;
+    border-bottom: 2px solid #000;
+    padding-bottom: 3px;
+    margin-bottom: 15px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-family: "Georgia", serif;
+}
+.dashboard-article {
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed #ccc;
+}
+.dashboard-title { font-size: 1.25em; font-weight: bold; margin-bottom: 5px; font-family: "Georgia", serif; }
 .dashboard-link { text-decoration: none; color: #000; }
-.dashboard-meta { font-size: 0.9em; color: #555; margin-bottom: 10px; }
-.dashboard-summary { font-size: 0.95em; line-height: 1.4; color: #222; font-style: italic; }
+.dashboard-link:hover { text-decoration: underline; }
+.dashboard-meta { font-size: 0.85em; color: #333; margin-bottom: 8px; }
+.dashboard-summary { font-size: 0.95em; line-height: 1.4; color: #111; font-style: italic; }
 
 /* Navigation Footer */
 .nav-footer {
-    margin-top: 50px;
-    padding-top: 20px;
-    border-top: 2px solid #000;
+    margin-top: 45px;
+    padding-top: 15px;
+    border-top: 1px solid #000;
     text-align: center;
-    font-size: 1.1em;
+    font-size: 1.05em;
 }
-.nav-link { margin: 0 15px; text-decoration: none; font-weight: bold; color: #000; }
+.nav-link { margin: 0 12px; text-decoration: none; font-weight: bold; color: #000; }
 '''
 
 IMAGE_ID_COUNTER = 0
@@ -221,6 +380,64 @@ def summarize_content(text, is_korean):
         except Exception as e2:
             print(f"Gemini summarization failed with fallback models: {e2}")
     return None
+
+def generate_editorial(articles):
+    """Generate a synthesized daily editorial briefing from all articles."""
+    if not GEMINI_API_KEY or not ai_client:
+        print("Skipping editorial: Gemini API not available.")
+        return None
+        
+    if not articles:
+        return None
+        
+    print(f"Generating daily editorial briefing from {len(articles)} articles...")
+    
+    article_briefs = []
+    has_korean = False
+    for art in articles:
+        title = art['title']
+        publisher = art['publisher']
+        summary = art['summary'] or (art['content'][:500] + "...")
+        article_briefs.append(f"Publisher: {publisher}\nTitle: {title}\nSummary:\n{summary}\n")
+        if art['is_korean']:
+            has_korean = True
+            
+    articles_input = "\n---\n".join(article_briefs)
+    lang_instr = "Korean" if has_korean else "English"
+    
+    prompt = f"""
+    You are the Editor-in-Chief of a customized daily newsletter digest.
+    Read the summaries of today's incoming newsletters:
+    
+    {articles_input}
+    
+    Write a short, professional editorial/morning briefing (around 100-150 words) synthesizing the most interesting themes, trends, or major highlights from today's issues.
+    Start directly with the content. Avoid greetings like "Here is your briefing" or "As the editor-in-chief". Just write a clean, journalistic briefing/editorial.
+    IMPORTANT: Provide the briefing in {lang_instr} because the main reader reads in {lang_instr}.
+    """
+    
+    try:
+        response = ai_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        if response and response.text:
+            print("Successfully generated daily editorial.")
+            return response.text.strip()
+    except Exception as e:
+        print(f"Failed to generate editorial: {e}")
+        try:
+            response = ai_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            if response and response.text:
+                print("Successfully generated daily editorial (2.5 fallback).")
+                return response.text.strip()
+        except Exception as e2:
+            print(f"Failed to generate editorial with fallback: {e2}")
+    return None
+
 
 def fetch_with_retry(url, retries=3, timeout=10):
     """Fetch URL with retries and basic error handling."""
@@ -410,9 +627,8 @@ def process_images(book, html_str, cid_images):
                 # Use PIL to validate and potentially convert image
                 pil_img = Image.open(io.BytesIO(img_data))
                 
-                # Convert to RGB if necessary (Kindle likes RGB JPEG/PNG)
-                if pil_img.mode in ("RGBA", "P"):
-                    pil_img = pil_img.convert("RGB")
+                # Convert to Grayscale ('L' mode) for optimal e-ink rendering and file size
+                pil_img = pil_img.convert("L")
                 
                 # Resize if too large
                 max_width = 800
@@ -446,6 +662,49 @@ def process_images(book, html_str, cid_images):
             
     return html.tostring(tree, encoding='unicode', method='xml')
 
+def extract_view_in_browser_link(raw_html):
+    """Find a 'view in browser' or similar web version link in the HTML."""
+    if not raw_html:
+        return None
+    try:
+        parser = html.HTMLParser(encoding='utf-8')
+        tree = html.fromstring(raw_html.encode('utf-8'), parser=parser)
+        noise_patterns = ['view in browser', 'view online', 'web version', 'read online', 'view it in your browser', 'read in browser', 'read on subhead', 'view in your browser']
+        for link in tree.xpath('//a'):
+            text = link.text_content().lower()
+            href = link.get('href')
+            if href and any(p in text for p in noise_patterns):
+                return href
+    except Exception as e:
+        print(f"Failed to extract web version link: {e}")
+    return None
+
+def extract_newsletter_name(sender):
+    """Extract display name of the sender, or fall back to domain/username."""
+    if not sender:
+        return "Unknown Newsletter"
+    
+    # Check if we have display name like: Morning Brew <news@morningbrew.com>
+    if '<' in sender:
+        match = re.match(r'^([^<]+)', sender)
+        if match:
+            name = match.group(1).strip()
+            name = name.strip('"\'')
+            if name:
+                return name
+                
+    # Fall back to parsing the email address
+    email_match = re.search(r'<([^>]+)>', sender)
+    email_addr = email_match.group(1).strip() if email_match else sender.strip()
+    if '@' in email_addr:
+        domain = email_addr.split('@')[-1]
+        parts = domain.split('.')
+        if len(parts) > 1:
+            name = parts[-2] if parts[-2] not in ('co', 'com', 'org', 'net', 'edu', 'gov') or len(parts) < 3 else parts[-3]
+            return name.capitalize()
+        return domain.capitalize()
+    return sender
+
 def process_newsletters():
     articles = []
     with IMAPClient('imap.gmail.com') as client:
@@ -462,6 +721,9 @@ def process_newsletters():
             
             subject, sender, raw_html, cid_images = get_email_data(fetch_data[msgid][b'RFC822'])
             
+            # Extract web version link before any cleaning is applied
+            web_version_url = extract_view_in_browser_link(raw_html)
+            
             doc = Document(raw_html)
             title = doc.short_title()
             if not title or any(x in title.lower() for x in ['no title', 'untitled', 'no-title']):
@@ -473,7 +735,6 @@ def process_newsletters():
                 print(f"Readability failed for '{title}', using safe cleaner fallback.")
                 content = clean_html_safe(raw_html)
             else:
-                # Even if Readability works, run advanced cleanup on the result
                 parser = html.HTMLParser(encoding='utf-8')
                 tree = html.fromstring(content.encode('utf-8'), parser=parser)
                 tree = advanced_cleanup(tree)
@@ -482,10 +743,8 @@ def process_newsletters():
             content = strip_emojis(content)
             title = strip_emojis(title)
             
-            # Detect language for AI summarization
             is_korean = bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', content))
             
-            # Generate AI Summary
             summary = summarize_content(content, is_korean)
             
             articles.append({
@@ -493,55 +752,135 @@ def process_newsletters():
                 'content': content,
                 'cid_images': cid_images,
                 'sender': sender,
+                'publisher': extract_newsletter_name(sender),
                 'summary': summary,
                 'is_korean': is_korean,
-                'reading_time': estimate_reading_time(content)
+                'reading_time': estimate_reading_time(content),
+                'web_version_url': web_version_url
             })
-            client.copy(msgid, PROCESSED_LABEL)
-            client.delete_messages(msgid)
-        client.expunge()
+            if not DEBUG:
+                client.copy(msgid, PROCESSED_LABEL)
+                client.delete_messages(msgid)
+        if not DEBUG:
+            client.expunge()
     return articles
 
-def generate_cover_image(title, date_str):
-    """Generate a simple, modern cover image for the EPUB."""
+def generate_cover_image(title, date_str, weather_info=None):
+    """Generate a classic daily newspaper masthead cover image for the EPUB."""
     width, height = 600, 800
-    # Dark blue-grey background
-    image = Image.new('RGB', (width, height), color=(44, 62, 80))
+    # Cream paper background
+    image = Image.new('RGB', (width, height), color=(248, 246, 240))
     draw = ImageDraw.Draw(image)
     
-    # Try to find a standard font
+    # Try to find standard elegant serif fonts
     font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", # Ubuntu
-        "/System/Library/Fonts/Helvetica.ttc",                # macOS
-        "/Library/Fonts/Arial.ttf",                           # macOS
-        "arial.ttf"                                           # Windows
+        "/System/Library/Fonts/Times.ttc",                      # macOS
+        "/System/Library/Fonts/Supplemental/Georgia.ttf",       # macOS
+        "/Library/Fonts/Georgia.ttf",                           # macOS Supplemental
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf", # Ubuntu/Linux
+        "georgia.ttf",
+        "times.ttf",
+        "arial.ttf"
     ]
     
     title_font = None
-    date_font = None
+    meta_font = None
+    sub_font = None
+    
     for path in font_paths:
         try:
-            if os.path.exists(path) or path == "arial.ttf":
-                title_font = ImageFont.truetype(path, 45)
-                date_font = ImageFont.truetype(path, 30)
+            if os.path.exists(path) or path in ["georgia.ttf", "times.ttf", "arial.ttf"]:
+                title_font = ImageFont.truetype(path, 52)
+                meta_font = ImageFont.truetype(path, 16)
+                sub_font = ImageFont.truetype(path, 22)
                 break
         except:
             continue
             
     if not title_font:
         title_font = ImageFont.load_default()
-        date_font = ImageFont.load_default()
+        meta_font = ImageFont.load_default()
+        sub_font = ImageFont.load_default()
 
-    # Draw Title
-    title_w = draw.textlength(title, font=title_font) if hasattr(draw, 'textlength') else 100
-    draw.text(((width - title_w)/2, height/3), title, fill=(236, 240, 241), font=title_font)
+    # Draw border around the page
+    margin = 25
+    draw.rectangle([margin, margin, width - margin, height - margin], outline=(0, 0, 0), width=2)
     
-    # Draw Date
-    date_w = draw.textlength(date_str, font=date_font) if hasattr(draw, 'textlength') else 100
-    draw.text(((width - date_w)/2, height/2), date_str, fill=(189, 195, 199), font=date_font)
+    # --- MASTHEAD ---
+    # Draw double rules at the top of masthead
+    masthead_top = 60
+    draw.line([margin + 10, masthead_top, width - margin - 10, masthead_top], fill=(0, 0, 0), width=4)
     
-    # Draw a simple accent line
-    draw.rectangle([width/4, height/2.5, 3*width/4, height/2.5 + 5], fill=(52, 152, 219))
+    # Main Newspaper Title
+    title_text = "THE DAILY DIGEST"
+    title_w = draw.textlength(title_text, font=title_font) if hasattr(draw, 'textlength') else 350
+    draw.text(((width - title_w)/2, masthead_top + 20), title_text, fill=(0, 0, 0), font=title_font)
+    
+    # Draw rules for the metadata bar
+    bar_top = masthead_top + 95
+    bar_height = 32
+    draw.line([margin + 10, bar_top, width - margin - 10, bar_top], fill=(0, 0, 0), width=2)
+    draw.line([margin + 10, bar_top + bar_height, width - margin - 10, bar_top + bar_height], fill=(0, 0, 0), width=1)
+    
+    # Metadata Text
+    day_of_year = datetime.date.today().strftime("%j")
+    vol_str = f"VOL. I  NO. {day_of_year}"
+    price_str = "PRICE: FREE"
+    
+    draw.text((margin + 20, bar_top + 8), vol_str, fill=(0, 0, 0), font=meta_font)
+    
+    date_w = draw.textlength(date_str, font=meta_font) if hasattr(draw, 'textlength') else 100
+    draw.text(((width - date_w)/2, bar_top + 8), date_str, fill=(0, 0, 0), font=meta_font)
+    
+    price_w = draw.textlength(price_str, font=meta_font) if hasattr(draw, 'textlength') else 80
+    draw.text((width - margin - 20 - price_w, bar_top + 8), price_str, fill=(0, 0, 0), font=meta_font)
+    
+    # --- WEATHER BAR ---
+    weather_y = bar_top + bar_height + 15
+    if weather_info:
+        # Strip unicode emojis to be safe for drawing with standard fonts
+        weather_clean = weather_info.replace("☀️", "").replace("🌤️", "").replace("⛅", "").replace("☁️", "").replace("🌫️", "").replace("🌧️", "").replace("❄️", "").replace("🌦️", "").replace("⛈️", "").strip()
+        weather_text = f"Weather Briefing  |  {weather_clean}"
+        weather_w = draw.textlength(weather_text, font=meta_font) if hasattr(draw, 'textlength') else 150
+        draw.text(((width - weather_w)/2, weather_y), weather_text, fill=(0, 0, 0), font=meta_font)
+        draw.line([margin + 10, weather_y + 25, width - margin - 10, weather_y + 25], fill=(0, 0, 0), width=1)
+        headline_y = weather_y + 60
+    else:
+        headline_y = bar_top + bar_height + 50
+        
+    # --- HEADLINE / CENTRAL DESIGN ---
+    headline = "Your Customized Morning Edition"
+    head_w = draw.textlength(headline, font=sub_font) if hasattr(draw, 'textlength') else 200
+    draw.text(((width - head_w)/2, headline_y), headline, fill=(0, 0, 0), font=sub_font)
+    
+    # Draw a vintage looking column divider
+    center_y = headline_y + 80
+    draw.line([width/2, center_y, width/2, center_y + 350], fill=(0, 0, 0), width=1)
+    
+    # Left Column: "IN THIS ISSUE"
+    col_margin = margin + 30
+    draw.text((col_margin, center_y), "IN THIS ISSUE", fill=(0, 0, 0), font=meta_font)
+    draw.line([col_margin, center_y + 25, width/2 - 20, center_y + 25], fill=(0, 0, 0), width=1)
+    
+    bullet_y = center_y + 40
+    draw.text((col_margin, bullet_y), "• Daily Editorial Summary", fill=(0, 0, 0), font=meta_font)
+    draw.text((col_margin, bullet_y + 30), "• Curated Newsletters", fill=(0, 0, 0), font=meta_font)
+    draw.text((col_margin, bullet_y + 60), "• Key Takeaways & Summaries", fill=(0, 0, 0), font=meta_font)
+    draw.text((col_margin, bullet_y + 90), "• Grayscale Image Optimizations", fill=(0, 0, 0), font=meta_font)
+    
+    # Right Column: A decorative graphic block
+    emblem_left = width/2 + 30
+    emblem_right = width - margin - 30
+    emblem_top = center_y
+    emblem_bottom = center_y + 160
+    draw.rectangle([emblem_left, emblem_top, emblem_right, emblem_bottom], outline=(0, 0, 0), width=2)
+    draw.rectangle([emblem_left + 5, emblem_top + 5, emblem_right - 5, emblem_bottom - 5], outline=(0, 0, 0), width=1)
+    press_str = "NEWS DIGEST"
+    press_w = draw.textlength(press_str, font=meta_font) if hasattr(draw, 'textlength') else 60
+    draw.text((emblem_left + (emblem_right - emblem_left - press_w)/2, emblem_top + 70), press_str, fill=(0, 0, 0), font=meta_font)
+
+    # Convert to grayscale
+    image = image.convert("L")
 
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='JPEG', quality=90)
@@ -583,39 +922,68 @@ def create_epub(articles):
     has_korean = any(art['is_korean'] for art in articles)
     book.set_language('ko' if has_korean else 'en')
     
+    # Fetch weather info if location is provided
+    weather_info = fetch_weather(USER_LOCATION)
+    
     # Set Cover
     if os.path.exists('cover.jpg'):
         with open('cover.jpg', 'rb') as f:
             book.set_cover("cover.jpg", f.read())
     else:
-        cover_content = generate_cover_image("Daily Digest", date_str)
+        cover_content = generate_cover_image("Daily Digest", date_str, weather_info)
         book.set_cover("cover.jpg", cover_content)
     
     style_item = epub.EpubItem(uid="style_default", file_name="style/default.css", media_type="text/css", content=DEFAULT_STYLE)
     book.add_item(style_item)
 
-    # 1. Create Dashboard (Front Page)
-    dashboard = epub.EpubHtml(title="Daily Dashboard", file_name='text/dashboard.xhtml', lang='ko' if has_korean else 'en')
-    dash_html = f"<h1>Daily Digest Dashboard</h1><p class='metadata'>{date_str}</p>"
-    
-    for i, art in enumerate(articles):
-        sender_match = re.search(r'([^<]+)', art['sender'])
-        sender_name = sender_match.group(1).strip() if sender_match else art['sender']
-        
-        summary_snippet = art['summary'].split('\n')[0] if art['summary'] else "No summary available."
-        if summary_snippet.startswith('• '): summary_snippet = summary_snippet[2:]
-        
-        dash_html += f"""
-            <div class="dashboard-article">
-                <div class="dashboard-title"><a href="chap_{i}.xhtml" class="dashboard-link">{art['title']}</a></div>
-                <div class="dashboard-meta">From: {sender_name} | {art['reading_time']} min read</div>
-                <div class="dashboard-summary">{summary_snippet}</div>
+    # Generate the Editorial Briefing using Gemini
+    editorial_text = generate_editorial(articles)
+    editorial_html = ""
+    if editorial_text:
+        formatted_editorial = editorial_text.replace('\n', '<br/>')
+        editorial_html = f"""
+            <div class="editorial-box">
+                <div class="editorial-title">Morning Editorial Briefing</div>
+                <div class="editorial-text">{formatted_editorial}</div>
             </div>
         """
+
+    # Group articles by their publisher (newsletter name)
+    from collections import defaultdict
+    grouped_articles = defaultdict(list)
+    for i, art in enumerate(articles):
+        grouped_articles[art['publisher']].append((i, art))
+
+    # 1. Create Dashboard (Front Page / Front Sheet)
+    dashboard = epub.EpubHtml(title="Daily Dashboard", file_name='text/dashboard.xhtml', lang='ko' if has_korean else 'en')
+    
+    meta_text = date_str
+    if weather_info:
+        meta_text += f" | {weather_info}"
+        
+    dash_html = f"<h1>Daily Digest Dashboard</h1><p class='metadata'>{meta_text}</p>"
+    dash_html += editorial_html
+    
+    for publisher, pub_articles in grouped_articles.items():
+        dash_html += f'<div class="publisher-section">'
+        dash_html += f'  <div class="publisher-header">{publisher}</div>'
+        for idx, art in pub_articles:
+            summary_snippet = art['summary'].split('\n')[0] if art['summary'] else "No summary available."
+            if summary_snippet.startswith('• '): summary_snippet = summary_snippet[2:]
+            
+            dash_html += f"""
+                <div class="dashboard-article">
+                    <div class="dashboard-title"><a href="chap_{idx}.xhtml" class="dashboard-link">{art['title']}</a></div>
+                    <div class="dashboard-meta">{art['reading_time']} min read</div>
+                    <div class="dashboard-summary">{summary_snippet}</div>
+                </div>
+             """
+        dash_html += f'</div>'
+        
     dashboard.content = dash_html
     dashboard.add_item(style_item)
     book.add_item(dashboard)
-
+ 
     chapters = [dashboard]
     for i, art in enumerate(articles):
         is_korean = art['is_korean']
@@ -632,10 +1000,10 @@ def create_epub(articles):
                     processed_content = ''.join([html.tostring(child, encoding='unicode') for child in body])
             except:
                 pass
-
+ 
         # Apply typography improvements
         processed_content = apply_dropcap(processed_content, is_korean)
-
+ 
         # Build smart metadata header
         sender_match = re.search(r'([^<]+)', art['sender'])
         sender_name = sender_match.group(1).strip() if sender_match else art['sender']
@@ -651,7 +1019,15 @@ def create_epub(articles):
                     <div class="summary-text">{formatted_summary}</div>
                 </div>
             """
-
+            
+        web_link_html = ""
+        if art.get('web_version_url'):
+            web_link_html = f"""
+                <div class="web-link-box">
+                    <a href="{art['web_version_url']}" class="web-link">🔗 View Original Web Version</a>
+                </div>
+            """
+ 
         # Navigation Footer
         next_link = f'<a href="chap_{i+1}.xhtml" class="nav-link">Next Article →</a>' if i < len(articles) - 1 else ''
         nav_footer = f"""
@@ -660,22 +1036,24 @@ def create_epub(articles):
                 {next_link}
             </div>
         """
-
+ 
         chapter = epub.EpubHtml(title=art['title'], file_name=f'text/chap_{i}.xhtml', lang='ko' if is_korean else 'en')
         chapter.content = f"""
             <h1>{art['title']}</h1>
+            <div class="byline">By {art['publisher']}</div>
             <div class="metadata">
-                From: <strong>{sender_name}</strong> | {art['reading_time']} min read
+                {art['reading_time']} min read
             </div>
             {summary_html}
             <div>{processed_content}</div>
+            {web_link_html}
             {nav_footer}
         """
         chapter.add_item(style_item)
         
         book.add_item(chapter)
         chapters.append(chapter)
-
+ 
     book.toc = tuple(chapters)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
