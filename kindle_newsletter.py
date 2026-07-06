@@ -1158,7 +1158,7 @@ def create_epub(articles):
     if chapters:
         book.guide.append({'type': 'text', 'title': 'Beginning', 'href': chapters[0].file_name})
         
-    epub.write_epub(filename, book, opts={'epub3_landmark': True, 'landmark_title': 'Table of Contents'})
+    epub.write_epub(filename, book, options={'epub3_landmark': True, 'landmark_title': 'Table of Contents'})
     return filename
 
 def send_emails(filepath):
