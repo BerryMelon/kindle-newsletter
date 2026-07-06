@@ -1149,8 +1149,8 @@ def create_epub(articles):
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     
-    # Prepend cover to the spine so swipe-reading starts from the cover page
-    book.spine = ['cover', 'nav'] + chapters
+    # Prepend cover to the spine so swipe-reading starts from the cover page (excluding nav from linear flow)
+    book.spine = ['cover'] + chapters
     
     # Configure EPUB Guide / Landmarks for Kindle native menu navigation
     book.guide.append({'type': 'cover', 'title': 'Cover Page', 'href': 'cover.xhtml'})
