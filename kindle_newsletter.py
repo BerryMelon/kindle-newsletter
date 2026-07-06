@@ -346,8 +346,9 @@ def summarize_content(text, is_korean):
     
     prompt = f"""
     You are an expert editor for a daily newsletter digest.
-    Read the following article and provide two things:
-    1. A short, punchy one-line summary (maximum 75 characters) suitable for a newspaper cover headline.
+    Read the following newsletter article and provide:
+    1. A short, punchy one-line summary (maximum 75 characters) of the MAIN TOPIC or KEY NEWS story discussed in this issue. It should read like a newspaper front-page headline (e.g., "Tech stocks rally as inflation cools" or "Scientists discover new memory pathway").
+       CRITICAL: Do NOT write generic titles like "Morning Brew newsletter", "Weekly digest", or mention the name of the newsletter or the date. Focus on the actual news content.
     2. A detailed summary of the article in exactly 3 bullet points.
     
     Your output MUST follow this exact format:
@@ -579,6 +580,14 @@ def get_email_data(msg_bytes):
             decoded_subject += part.decode(encoding or 'utf-8', errors='ignore')
         else:
             decoded_subject += part
+            
+    from_parts = email.header.decode_header(from_header)
+    decoded_from = ""
+    for part, encoding in from_parts:
+        if isinstance(part, bytes):
+            decoded_from += part.decode(encoding or 'utf-8', errors='ignore')
+        else:
+            decoded_from += part
     
     html_content = ""
     cid_images = {}
@@ -604,7 +613,7 @@ def get_email_data(msg_bytes):
         charset = msg.get_content_charset() or 'utf-8'
         html_content = payload.decode(charset, errors='ignore')
 
-    return decoded_subject, from_header, html_content, cid_images
+    return decoded_subject, decoded_from, html_content, cid_images
 
 def process_images(book, html_str, cid_images):
     global IMAGE_ID_COUNTER
