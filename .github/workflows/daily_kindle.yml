@@ -15,6 +15,8 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Install Korean Fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-nanum
       - name: Run Digest Script
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}

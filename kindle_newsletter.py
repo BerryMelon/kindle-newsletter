@@ -818,16 +818,38 @@ def generate_cover_image(title, date_str, weather_info=None, editorial_text=None
     image = Image.new('RGB', (width, height), color=(248, 246, 240))
     draw = ImageDraw.Draw(image)
     
-    # Try to find standard elegant serif fonts
-    font_paths = [
-        "/System/Library/Fonts/Times.ttc",                      # macOS
-        "/System/Library/Fonts/Supplemental/Georgia.ttf",       # macOS
-        "/Library/Fonts/Georgia.ttf",                           # macOS Supplemental
+    # Detect if any text to be rendered contains CJK (Korean) characters
+    has_korean = (
+        bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', date_str)) or
+        (weather_info and bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', weather_info))) or
+        (editorial_text and bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', editorial_text))) or
+        (articles and any(bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', art['one_liner'])) for art in articles))
+    )
+    
+    # Prioritize CJK-supporting fonts if Korean is present
+    font_paths = []
+    if has_korean:
+        print("Korean characters detected on cover page. Prioritizing CJK fonts...")
+        font_paths.extend([
+            # Ubuntu Nanum Myeongjo (Beautiful Serif CJK)
+            "/usr/share/fonts/truetype/nanum/NanumMyeongjo.ttf",
+            # Ubuntu Nanum Gothic (Sans CJK)
+            "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+            # macOS Apple SD Gothic Neo
+            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+            # macOS AppleGothic
+            "/System/Library/Fonts/Supplemental/AppleGothic.ttf"
+        ])
+        
+    font_paths.extend([
+        "/System/Library/Fonts/Times.ttc",                      # macOS Times
+        "/System/Library/Fonts/Supplemental/Georgia.ttf",       # macOS Georgia
+        "/Library/Fonts/Georgia.ttf",                           # macOS Georgia Supplemental
         "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf", # Ubuntu/Linux
         "georgia.ttf",
         "times.ttf",
         "arial.ttf"
-    ]
+    ])
     
     title_font = None
     meta_font = None
