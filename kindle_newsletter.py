@@ -324,6 +324,7 @@ def estimate_reading_time(html_content):
 
 def summarize_content(text, is_korean):
     """Generate a 3-bullet summary and a one-liner cover summary using Gemini API."""
+    import json
     if not GEMINI_API_KEY:
         print("Skipping summary: GEMINI_API_KEY not found.")
         return None, None
@@ -351,59 +352,75 @@ def summarize_content(text, is_korean):
        CRITICAL: Do NOT write generic titles like "Morning Brew newsletter", "Weekly digest", or mention the name of the newsletter or the date. Focus on the actual news content.
     2. A detailed summary of the article in exactly 3 bullet points.
     
-    Your output MUST follow this exact format:
-    ONE_LINER: [one-line summary here]
-    BULLETS:
-    • [bullet point 1]
-    • [bullet point 2]
-    • [bullet point 3]
+    Output your response in JSON format with these exact keys:
+    {{
+        "one_liner": "your cover one-liner summary here",
+        "bullets": [
+            "bullet point 1",
+            "bullet point 2",
+            "bullet point 3"
+        ]
+    }}
     
     IMPORTANT: Provide both summaries in {lang_instr} because the original text is in {lang_instr}.
     
     Text: {clean_text}
     """
     
-    def parse_response(response_text):
-        if not response_text:
-            return None, None
-        text_out = response_text.strip()
-        one_liner = ""
-        bullets = ""
-        if "ONE_LINER:" in text_out and "BULLETS:" in text_out:
-            parts = text_out.split("BULLETS:")
-            one_liner = parts[0].replace("ONE_LINER:", "").strip()
-            bullets = parts[1].strip()
-        else:
-            bullets = text_out
+    def parse_json_response(text_out):
+        try:
+            # Clean text from potential markdown wrap
+            clean_json = text_out.strip()
+            if clean_json.startswith("```json"):
+                clean_json = clean_json[7:]
+            elif clean_json.startswith("```"):
+                clean_json = clean_json[3:]
+            if clean_json.endswith("```"):
+                clean_json = clean_json[:-3]
+            clean_json = clean_json.strip()
+            
+            data = json.loads(clean_json)
+            one_liner = data.get("one_liner", "").strip()
+            bullets_list = data.get("bullets", [])
+            bullets = "\n".join([f"• {b}" for b in bullets_list if b.strip()])
+            
+            one_liner = one_liner.strip('"\'[] ')
+            return bullets, one_liner
+        except Exception as e:
+            print(f"JSON parsing failed: {e}. Attempting regex fallback...")
+            # Fallback regex parsing
+            one_liner = ""
             lines = [line.strip("•-* ") for line in text_out.split('\n') if line.strip()]
-            one_liner = lines[0] if lines else "Summary of the issue"
-        
-        # Clean bullets formatting
-        bullets = bullets.replace('* ', '• ').replace('- ', '• ')
-        # Trim one-liner if it has quotes or brackets
-        one_liner = one_liner.strip('"\'[] ')
-        return bullets, one_liner
+            for line in lines:
+                if "one_liner" in line.lower() or "headline" in line.lower():
+                    one_liner = line.split(":", 1)[-1].strip()
+            if not one_liner and lines:
+                one_liner = lines[0]
+            bullets = "\n".join([f"• {l}" for l in lines if l != one_liner][:3])
+            return bullets, one_liner
 
     try:
         response = ai_client.models.generate_content(
             model="gemini-2.0-flash",
-            contents=prompt
+            contents=prompt,
+            config={'response_mime_type': 'application/json'}
         )
         if response and response.text:
             print("Successfully generated AI summary.")
-            return parse_response(response.text)
+            return parse_json_response(response.text)
     except Exception as e:
-        print(f"Gemini summarization failed with gemini-2.0-flash: {e}")
+        print(f"Gemini gemini-2.0-flash failed: {e}. Trying fallback model...")
         try:
             response = ai_client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=prompt
+                contents=prompt,
+                config={'response_mime_type': 'application/json'}
             )
             if response and response.text:
                 print("Successfully generated AI summary (2.5 fallback).")
-                return parse_response(response.text)
+                return parse_json_response(response.text)
         except Exception as e2:
-            print(f"Gemini summarization failed with fallback models: {e2}")
+            print(f"Gemini fallback failed: {e2}")
     return None, None
 
 def generate_editorial(articles):
