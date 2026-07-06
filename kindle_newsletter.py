@@ -123,7 +123,13 @@ body {
     color: #000; 
     background-color: #fff; 
 }
-h1 { text-align: center; font-size: 1.8em; margin-bottom: 0.2em; color: #000; font-family: "Georgia", serif; font-weight: bold; }
+h1, h2, h3, h4, h5, h6 { 
+    font-family: "Georgia", serif; 
+    color: #000; 
+    page-break-after: avoid; 
+    break-after: avoid; 
+}
+h1 { text-align: center; font-size: 1.8em; margin-bottom: 0.2em; font-weight: bold; }
 .metadata { 
     text-align: center; 
     font-size: 0.95em; 
@@ -135,7 +141,7 @@ h1 { text-align: center; font-size: 1.8em; margin-bottom: 0.2em; color: #000; fo
     text-transform: uppercase;
     letter-spacing: 1px;
 }
-h2 { font-size: 1.4em; border-bottom: 1px solid #000; padding-bottom: 3px; margin-top: 30px; font-family: "Georgia", serif; }
+h2 { font-size: 1.4em; border-bottom: 1px solid #000; padding-bottom: 3px; margin-top: 30px; }
 h3 { font-size: 1.2em; margin-top: 25px; }
 p { 
     margin-bottom: 1.3em; 
@@ -162,6 +168,12 @@ td { padding: 8px; border-bottom: 1px solid #ccc; }
     margin: 0.1em 0.15em 0 0;
     color: #000;
     font-weight: bold;
+}
+
+.leadin {
+    font-weight: bold;
+    font-variant: small-caps;
+    letter-spacing: 0.5px;
 }
 
 .byline {
@@ -191,30 +203,43 @@ td { padding: 8px; border-bottom: 1px solid #ccc; }
     font-weight: bold;
 }
 
+/* Premium Pull-Quotes */
 blockquote {
-    margin: 20px 10px;
-    padding: 10px 20px;
-    border-left: 4px solid #000;
+    margin: 25px 20px;
+    padding: 12px 10px;
+    border-top: 1px solid #000;
+    border-bottom: 1px solid #000;
+    border-left: none;
+    border-right: none;
     background-color: transparent;
     font-style: italic;
-    color: #222;
+    font-size: 1.1em;
+    line-height: 1.5;
+    text-align: center;
+    color: #000;
 }
 
+/* E-Ink Optimized Code Blocks */
 code, pre {
     font-family: "Courier New", Courier, monospace;
     background-color: transparent;
-    padding: 2px 4px;
     border: 1px solid #000;
-    font-size: 0.9em;
+    font-size: 0.85em;
+}
+
+code {
+    padding: 2px 4px;
 }
 
 pre {
     display: block;
     padding: 12px;
     margin: 15px 0;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    word-wrap: break-word;
+    white-space: pre-wrap;       /* css-3 */
+    white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */
+    white-space: -pre-wrap;      /* Opera 4-6 */
+    white-space: -o-pre-wrap;    /* Opera 7 */
+    word-wrap: break-word;       /* Internet Explorer 5.5+ */
 }
 
 /* AI Summary Box */
@@ -986,7 +1011,7 @@ def generate_cover_image(title, date_str, weather_info=None, editorial_text=None
     image.save(img_byte_arr, format='JPEG', quality=90)
     return img_byte_arr.getvalue()
 def apply_dropcap(content, is_korean):
-    """Apply dropcap to the first letter of English articles only."""
+    """Apply dropcap to the first letter and lead-in styling to the next 3 words of English articles."""
     if is_korean: return content
     
     try:
@@ -1001,13 +1026,21 @@ def apply_dropcap(content, is_korean):
                 # Find the first letter after <p...>
                 match = re.search(r'(<p[^>]*>)(?:\s*)([a-zA-Z])', raw_p)
                 if match:
-                    new_p = raw_p[:match.start(2)] + f'<span class="dropcap">{match.group(2)}</span>' + raw_p[match.end(2):]
+                    remaining_text = raw_p[match.end(2):]
+                    # Match the first 3 words (consisting of non-space chars separated by spaces, stopping at tag start '<')
+                    words_match = re.match(r'^((?:\s*[^\s<]+){1,3})', remaining_text)
+                    if words_match:
+                        lead_words = words_match.group(1)
+                        new_p = raw_p[:match.start(2)] + f'<span class="dropcap">{match.group(2)}</span><span class="leadin">{lead_words}</span>' + remaining_text[words_match.end(1):]
+                    else:
+                        new_p = raw_p[:match.start(2)] + f'<span class="dropcap">{match.group(2)}</span>' + remaining_text
+                        
                     new_p_node = html.fromstring(new_p)
                     p.getparent().replace(p, new_p_node)
                     break
         return html.tostring(tree, encoding='unicode', method='html')
     except Exception as e:
-        print(f"Dropcap failed: {e}")
+        print(f"Dropcap/Leadin failed: {e}")
         return content
 
 def create_epub(articles):
@@ -1115,9 +1148,17 @@ def create_epub(articles):
     book.toc = tuple(chapters)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = ['nav'] + chapters
     
-    epub.write_epub(filename, book)
+    # Prepend cover to the spine so swipe-reading starts from the cover page
+    book.spine = ['cover', 'nav'] + chapters
+    
+    # Configure EPUB Guide / Landmarks for Kindle native menu navigation
+    book.guide.append({'type': 'cover', 'title': 'Cover Page', 'href': 'cover.xhtml'})
+    book.guide.append({'type': 'toc', 'title': 'Table of Contents', 'href': 'nav.xhtml'})
+    if chapters:
+        book.guide.append({'type': 'text', 'title': 'Beginning', 'href': chapters[0].file_name})
+        
+    epub.write_epub(filename, book, opts={'epub3_landmark': True, 'landmark_title': 'Table of Contents'})
     return filename
 
 def send_emails(filepath):
