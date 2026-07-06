@@ -766,7 +766,7 @@ def process_newsletters():
     return articles
 
 def generate_cover_image(title, date_str, weather_info=None):
-    """Generate a classic daily newspaper masthead cover image for the EPUB."""
+    """Generate a classic, clean daily newspaper cover image for the EPUB."""
     width, height = 600, 800
     # Cream paper background
     image = Image.new('RGB', (width, height), color=(248, 246, 240))
@@ -786,6 +786,7 @@ def generate_cover_image(title, date_str, weather_info=None):
     title_font = None
     meta_font = None
     sub_font = None
+    ornament_font = None
     
     for path in font_paths:
         try:
@@ -793,6 +794,7 @@ def generate_cover_image(title, date_str, weather_info=None):
                 title_font = ImageFont.truetype(path, 52)
                 meta_font = ImageFont.truetype(path, 16)
                 sub_font = ImageFont.truetype(path, 22)
+                ornament_font = ImageFont.truetype(path, 36)
                 break
         except:
             continue
@@ -801,6 +803,7 @@ def generate_cover_image(title, date_str, weather_info=None):
         title_font = ImageFont.load_default()
         meta_font = ImageFont.load_default()
         sub_font = ImageFont.load_default()
+        ornament_font = ImageFont.load_default()
 
     # Draw border around the page
     margin = 25
@@ -808,76 +811,46 @@ def generate_cover_image(title, date_str, weather_info=None):
     
     # --- MASTHEAD ---
     # Draw double rules at the top of masthead
-    masthead_top = 60
-    draw.line([margin + 10, masthead_top, width - margin - 10, masthead_top], fill=(0, 0, 0), width=4)
+    masthead_top = 80
+    draw.line([margin + 15, masthead_top, width - margin - 15, masthead_top], fill=(0, 0, 0), width=4)
     
     # Main Newspaper Title
     title_text = "THE DAILY DIGEST"
     title_w = draw.textlength(title_text, font=title_font) if hasattr(draw, 'textlength') else 350
-    draw.text(((width - title_w)/2, masthead_top + 20), title_text, fill=(0, 0, 0), font=title_font)
+    draw.text(((width - title_w)/2, masthead_top + 25), title_text, fill=(0, 0, 0), font=title_font)
     
     # Draw rules for the metadata bar
-    bar_top = masthead_top + 95
-    bar_height = 32
-    draw.line([margin + 10, bar_top, width - margin - 10, bar_top], fill=(0, 0, 0), width=2)
-    draw.line([margin + 10, bar_top + bar_height, width - margin - 10, bar_top + bar_height], fill=(0, 0, 0), width=1)
+    bar_top = masthead_top + 105
+    bar_height = 36
+    draw.line([margin + 15, bar_top, width - margin - 15, bar_top], fill=(0, 0, 0), width=2)
+    draw.line([margin + 15, bar_top + bar_height, width - margin - 15, bar_top + bar_height], fill=(0, 0, 0), width=2)
     
     # Metadata Text
     day_of_year = datetime.date.today().strftime("%j")
     vol_str = f"VOL. I  NO. {day_of_year}"
-    price_str = "PRICE: FREE"
     
-    draw.text((margin + 20, bar_top + 8), vol_str, fill=(0, 0, 0), font=meta_font)
+    # Left aligned Volume
+    draw.text((margin + 25, bar_top + 10), vol_str, fill=(0, 0, 0), font=meta_font)
     
+    # Right aligned Date (moved to the right)
     date_w = draw.textlength(date_str, font=meta_font) if hasattr(draw, 'textlength') else 100
-    draw.text(((width - date_w)/2, bar_top + 8), date_str, fill=(0, 0, 0), font=meta_font)
+    draw.text((width - margin - 25 - date_w, bar_top + 10), date_str, fill=(0, 0, 0), font=meta_font)
     
-    price_w = draw.textlength(price_str, font=meta_font) if hasattr(draw, 'textlength') else 80
-    draw.text((width - margin - 20 - price_w, bar_top + 8), price_str, fill=(0, 0, 0), font=meta_font)
+    # --- CENTER DECORATION & WEATHER ---
+    # Center of page: draw a beautiful centered print ornament (e.g. "❦" or geometric lines)
+    center_y = height / 2 - 50
     
-    # --- WEATHER BAR ---
-    weather_y = bar_top + bar_height + 15
+    # Draw classic floral ornament or typographic flourish
+    flourish = "❖   ❖   ❖"
+    flourish_w = draw.textlength(flourish, font=ornament_font) if hasattr(draw, 'textlength') else 100
+    draw.text(((width - flourish_w)/2, center_y), flourish, fill=(0, 0, 0), font=ornament_font)
+    
+    # Weather briefing centered below ornament
     if weather_info:
-        # Strip unicode emojis to be safe for drawing with standard fonts
         weather_clean = weather_info.replace("☀️", "").replace("🌤️", "").replace("⛅", "").replace("☁️", "").replace("🌫️", "").replace("🌧️", "").replace("❄️", "").replace("🌦️", "").replace("⛈️", "").strip()
-        weather_text = f"Weather Briefing  |  {weather_clean}"
-        weather_w = draw.textlength(weather_text, font=meta_font) if hasattr(draw, 'textlength') else 150
-        draw.text(((width - weather_w)/2, weather_y), weather_text, fill=(0, 0, 0), font=meta_font)
-        draw.line([margin + 10, weather_y + 25, width - margin - 10, weather_y + 25], fill=(0, 0, 0), width=1)
-        headline_y = weather_y + 60
-    else:
-        headline_y = bar_top + bar_height + 50
-        
-    # --- HEADLINE / CENTRAL DESIGN ---
-    headline = "Your Customized Morning Edition"
-    head_w = draw.textlength(headline, font=sub_font) if hasattr(draw, 'textlength') else 200
-    draw.text(((width - head_w)/2, headline_y), headline, fill=(0, 0, 0), font=sub_font)
-    
-    # Draw a vintage looking column divider
-    center_y = headline_y + 80
-    draw.line([width/2, center_y, width/2, center_y + 350], fill=(0, 0, 0), width=1)
-    
-    # Left Column: "IN THIS ISSUE"
-    col_margin = margin + 30
-    draw.text((col_margin, center_y), "IN THIS ISSUE", fill=(0, 0, 0), font=meta_font)
-    draw.line([col_margin, center_y + 25, width/2 - 20, center_y + 25], fill=(0, 0, 0), width=1)
-    
-    bullet_y = center_y + 40
-    draw.text((col_margin, bullet_y), "• Daily Editorial Summary", fill=(0, 0, 0), font=meta_font)
-    draw.text((col_margin, bullet_y + 30), "• Curated Newsletters", fill=(0, 0, 0), font=meta_font)
-    draw.text((col_margin, bullet_y + 60), "• Key Takeaways & Summaries", fill=(0, 0, 0), font=meta_font)
-    draw.text((col_margin, bullet_y + 90), "• Grayscale Image Optimizations", fill=(0, 0, 0), font=meta_font)
-    
-    # Right Column: A decorative graphic block
-    emblem_left = width/2 + 30
-    emblem_right = width - margin - 30
-    emblem_top = center_y
-    emblem_bottom = center_y + 160
-    draw.rectangle([emblem_left, emblem_top, emblem_right, emblem_bottom], outline=(0, 0, 0), width=2)
-    draw.rectangle([emblem_left + 5, emblem_top + 5, emblem_right - 5, emblem_bottom - 5], outline=(0, 0, 0), width=1)
-    press_str = "NEWS DIGEST"
-    press_w = draw.textlength(press_str, font=meta_font) if hasattr(draw, 'textlength') else 60
-    draw.text((emblem_left + (emblem_right - emblem_left - press_w)/2, emblem_top + 70), press_str, fill=(0, 0, 0), font=meta_font)
+        weather_text = f"Today's Weather: {weather_clean}"
+        weather_w = draw.textlength(weather_text, font=sub_font) if hasattr(draw, 'textlength') else 150
+        draw.text(((width - weather_w)/2, center_y + 80), weather_text, fill=(0, 0, 0), font=sub_font)
 
     # Convert to grayscale
     image = image.convert("L")
@@ -885,7 +858,6 @@ def generate_cover_image(title, date_str, weather_info=None):
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='JPEG', quality=90)
     return img_byte_arr.getvalue()
-
 def apply_dropcap(content, is_korean):
     """Apply dropcap to the first letter of English articles only."""
     if is_korean: return content
