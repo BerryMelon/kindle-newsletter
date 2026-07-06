@@ -323,18 +323,18 @@ def estimate_reading_time(html_content):
     return minutes
 
 def summarize_content(text, is_korean):
-    """Generate a concise summary using Gemini API (via google-genai)."""
+    """Generate a 3-bullet summary and a one-liner cover summary using Gemini API."""
     if not GEMINI_API_KEY:
         print("Skipping summary: GEMINI_API_KEY not found.")
-        return None
+        return None, None
         
     if not ai_client:
         print("Skipping summary: ai_client not initialized.")
-        return None
+        return None, None
 
     if not text or len(text) < 300:
         print(f"Skipping summary: Content too short ({len(text) if text else 0} chars).")
-        return None
+        return None, None
     
     # Remove HTML tags for the AI prompt
     clean_text = re.sub('<[^<]+?>', '', text).strip()
@@ -345,41 +345,65 @@ def summarize_content(text, is_korean):
     print(f"Requesting AI summary for {lang_instr} article ({len(clean_text)} chars)...")
     
     prompt = f"""
-    You are an expert editor for a daily newsletter digest. 
-    Provide a concise, high-level summary of the following article in exactly 3 bullet points.
-    Output ONLY the 3 bullet points, nothing else.
-    IMPORTANT: Provide the summary in {lang_instr} because the original text is in {lang_instr}.
+    You are an expert editor for a daily newsletter digest.
+    Read the following article and provide two things:
+    1. A short, punchy one-line summary (maximum 75 characters) suitable for a newspaper cover headline.
+    2. A detailed summary of the article in exactly 3 bullet points.
+    
+    Your output MUST follow this exact format:
+    ONE_LINER: [one-line summary here]
+    BULLETS:
+    • [bullet point 1]
+    • [bullet point 2]
+    • [bullet point 3]
+    
+    IMPORTANT: Provide both summaries in {lang_instr} because the original text is in {lang_instr}.
     
     Text: {clean_text}
     """
     
+    def parse_response(response_text):
+        if not response_text:
+            return None, None
+        text_out = response_text.strip()
+        one_liner = ""
+        bullets = ""
+        if "ONE_LINER:" in text_out and "BULLETS:" in text_out:
+            parts = text_out.split("BULLETS:")
+            one_liner = parts[0].replace("ONE_LINER:", "").strip()
+            bullets = parts[1].strip()
+        else:
+            bullets = text_out
+            lines = [line.strip("•-* ") for line in text_out.split('\n') if line.strip()]
+            one_liner = lines[0] if lines else "Summary of the issue"
+        
+        # Clean bullets formatting
+        bullets = bullets.replace('* ', '• ').replace('- ', '• ')
+        # Trim one-liner if it has quotes or brackets
+        one_liner = one_liner.strip('"\'[] ')
+        return bullets, one_liner
+
     try:
-        # Using the standard fast model found in your logs
         response = ai_client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
         )
         if response and response.text:
-            summary = response.text.strip()
-            summary = summary.replace('* ', '• ').replace('- ', '• ')
             print("Successfully generated AI summary.")
-            return summary
+            return parse_response(response.text)
     except Exception as e:
         print(f"Gemini summarization failed with gemini-2.0-flash: {e}")
-        # Fallback to 2.5 version also found in your logs
         try:
             response = ai_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt
             )
             if response and response.text:
-                summary = response.text.strip()
-                summary = summary.replace('* ', '• ').replace('- ', '• ')
                 print("Successfully generated AI summary (2.5 fallback).")
-                return summary
+                return parse_response(response.text)
         except Exception as e2:
             print(f"Gemini summarization failed with fallback models: {e2}")
-    return None
+    return None, None
 
 def generate_editorial(articles):
     """Generate a synthesized daily editorial briefing from all articles."""
@@ -745,7 +769,7 @@ def process_newsletters():
             
             is_korean = bool(re.search('[\u3131-\u3163\uac00-\ud7a3]+', content))
             
-            summary = summarize_content(content, is_korean)
+            summary, one_liner = summarize_content(content, is_korean)
             
             articles.append({
                 'title': title,
@@ -754,6 +778,7 @@ def process_newsletters():
                 'sender': sender,
                 'publisher': extract_newsletter_name(sender),
                 'summary': summary,
+                'one_liner': one_liner or title,
                 'is_korean': is_korean,
                 'reading_time': estimate_reading_time(content),
                 'web_version_url': web_version_url
@@ -765,8 +790,29 @@ def process_newsletters():
             client.expunge()
     return articles
 
-def generate_cover_image(title, date_str, weather_info=None):
-    """Generate a classic, clean daily newspaper cover image for the EPUB."""
+def draw_wrapped_text(draw, text, font, x, y, max_width, line_height, color=0):
+    """Draw wrapped text and return the ending Y coordinate."""
+    words = text.split()
+    lines = []
+    current_line = []
+    for word in words:
+        current_line.append(word)
+        line_text = " ".join(current_line)
+        w = draw.textlength(line_text, font=font) if hasattr(draw, 'textlength') else len(line_text) * 8
+        if w > max_width:
+            current_line.pop()
+            lines.append(" ".join(current_line))
+            current_line = [word]
+    if current_line:
+        lines.append(" ".join(current_line))
+        
+    for line in lines:
+        draw.text((x, y), line, fill=color, font=font)
+        y += line_height
+    return y
+
+def generate_cover_image(title, date_str, weather_info=None, editorial_text=None, articles=None):
+    """Generate a classic daily newspaper front-page cover image for the EPUB."""
     width, height = 600, 800
     # Cream paper background
     image = Image.new('RGB', (width, height), color=(248, 246, 240))
@@ -832,25 +878,58 @@ def generate_cover_image(title, date_str, weather_info=None):
     # Left aligned Volume
     draw.text((margin + 25, bar_top + 10), vol_str, fill=(0, 0, 0), font=meta_font)
     
-    # Right aligned Date (moved to the right)
+    # Right aligned Date
     date_w = draw.textlength(date_str, font=meta_font) if hasattr(draw, 'textlength') else 100
     draw.text((width - margin - 25 - date_w, bar_top + 10), date_str, fill=(0, 0, 0), font=meta_font)
     
-    # --- CENTER DECORATION & WEATHER ---
-    # Center of page: draw a beautiful centered print ornament (e.g. "❦" or geometric lines)
-    center_y = height / 2 - 50
-    
-    # Draw classic floral ornament or typographic flourish
-    flourish = "❖   ❖   ❖"
-    flourish_w = draw.textlength(flourish, font=ornament_font) if hasattr(draw, 'textlength') else 100
-    draw.text(((width - flourish_w)/2, center_y), flourish, fill=(0, 0, 0), font=ornament_font)
-    
-    # Weather briefing centered below ornament
+    # --- WEATHER BAR ---
+    weather_y = bar_top + bar_height + 15
     if weather_info:
         weather_clean = weather_info.replace("☀️", "").replace("🌤️", "").replace("⛅", "").replace("☁️", "").replace("🌫️", "").replace("🌧️", "").replace("❄️", "").replace("🌦️", "").replace("⛈️", "").strip()
         weather_text = f"Today's Weather: {weather_clean}"
-        weather_w = draw.textlength(weather_text, font=sub_font) if hasattr(draw, 'textlength') else 150
-        draw.text(((width - weather_w)/2, center_y + 80), weather_text, fill=(0, 0, 0), font=sub_font)
+        weather_w = draw.textlength(weather_text, font=meta_font) if hasattr(draw, 'textlength') else 150
+        draw.text(((width - weather_w)/2, weather_y), weather_text, fill=(0, 0, 0), font=meta_font)
+        draw.line([margin + 15, weather_y + 25, width - margin - 15, weather_y + 25], fill=(0, 0, 0), width=1)
+        start_y = weather_y + 40
+    else:
+        start_y = bar_top + bar_height + 25
+        
+    # --- DAILY EDITORIAL BRIEFING ---
+    if editorial_text:
+        ed_title = "EDITORIAL BRIEFING"
+        ed_title_w = draw.textlength(ed_title, font=meta_font) if hasattr(draw, 'textlength') else 150
+        draw.text(((width - ed_title_w)/2, start_y), ed_title, fill=(0, 0, 0), font=meta_font)
+        
+        ed_y = start_y + 25
+        end_ed_y = draw_wrapped_text(draw, editorial_text, meta_font, margin + 30, ed_y, width - 2 * margin - 60, 24)
+        
+        # Draw frame around editorial
+        draw.rectangle([margin + 15, start_y - 10, width - margin - 15, end_ed_y + 10], outline=(0, 0, 0), width=1)
+        start_y = end_ed_y + 35
+        
+    # --- TODAY'S HEADLINES / IN THIS EDITION ---
+    if articles:
+        toc_title = "IN THIS EDITION"
+        toc_title_w = draw.textlength(toc_title, font=meta_font) if hasattr(draw, 'textlength') else 120
+        draw.text(((width - toc_title_w)/2, start_y), toc_title, fill=(0, 0, 0), font=meta_font)
+        draw.line([margin + 15, start_y + 25, width - margin - 15, start_y + 25], fill=(0, 0, 0), width=1)
+        
+        bullet_y = start_y + 40
+        for art in articles[:6]:  # Show at most 6 articles to fit cover height
+            pub = art['publisher']
+            one_liner = art['one_liner']
+            bullet_text = f"• {pub}: {one_liner}"
+            bullet_y = draw_wrapped_text(draw, bullet_text, meta_font, margin + 30, bullet_y, width - 2 * margin - 60, 24)
+            bullet_y += 8
+            
+        start_y = bullet_y + 15
+
+    # Flourish at bottom
+    flourish = "❖   ❖   ❖"
+    flourish_w = draw.textlength(flourish, font=ornament_font) if hasattr(draw, 'textlength') else 100
+    flourish_y = max(start_y, 730)
+    if flourish_y < height - margin - 10:
+        draw.text(((width - flourish_w)/2, flourish_y), flourish, fill=(0, 0, 0), font=ornament_font)
 
     # Convert to grayscale
     image = image.convert("L")
@@ -897,66 +976,24 @@ def create_epub(articles):
     # Fetch weather info if location is provided
     weather_info = fetch_weather(USER_LOCATION)
     
-    # Set Cover
+    # Generate the Editorial Briefing using Gemini
+    editorial_text = generate_editorial(articles)
+    
+    # Set Cover (passing weather, editorial text, and articles dynamically to generate a rich front page)
     if os.path.exists('cover.jpg'):
         with open('cover.jpg', 'rb') as f:
             book.set_cover("cover.jpg", f.read())
     else:
-        cover_content = generate_cover_image("Daily Digest", date_str, weather_info)
+        cover_content = generate_cover_image("Daily Digest", date_str, weather_info, editorial_text, articles)
         book.set_cover("cover.jpg", cover_content)
     
     style_item = epub.EpubItem(uid="style_default", file_name="style/default.css", media_type="text/css", content=DEFAULT_STYLE)
     book.add_item(style_item)
 
-    # Generate the Editorial Briefing using Gemini
-    editorial_text = generate_editorial(articles)
-    editorial_html = ""
-    if editorial_text:
-        formatted_editorial = editorial_text.replace('\n', '<br/>')
-        editorial_html = f"""
-            <div class="editorial-box">
-                <div class="editorial-title">Morning Editorial Briefing</div>
-                <div class="editorial-text">{formatted_editorial}</div>
-            </div>
-        """
-
-    # Group articles by their publisher (newsletter name)
-    from collections import defaultdict
-    grouped_articles = defaultdict(list)
-    for i, art in enumerate(articles):
-        grouped_articles[art['publisher']].append((i, art))
-
-    # 1. Create Dashboard (Front Page / Front Sheet)
-    dashboard = epub.EpubHtml(title="Daily Dashboard", file_name='text/dashboard.xhtml', lang='ko' if has_korean else 'en')
-    
-    meta_text = date_str
-    if weather_info:
-        meta_text += f" | {weather_info}"
-        
-    dash_html = f"<h1>Daily Digest Dashboard</h1><p class='metadata'>{meta_text}</p>"
-    dash_html += editorial_html
-    
-    for publisher, pub_articles in grouped_articles.items():
-        dash_html += f'<div class="publisher-section">'
-        dash_html += f'  <div class="publisher-header">{publisher}</div>'
-        for idx, art in pub_articles:
-            summary_snippet = art['summary'].split('\n')[0] if art['summary'] else "No summary available."
-            if summary_snippet.startswith('• '): summary_snippet = summary_snippet[2:]
-            
-            dash_html += f"""
-                <div class="dashboard-article">
-                    <div class="dashboard-title"><a href="chap_{idx}.xhtml" class="dashboard-link">{art['title']}</a></div>
-                    <div class="dashboard-meta">{art['reading_time']} min read</div>
-                    <div class="dashboard-summary">{summary_snippet}</div>
-                </div>
-             """
-        dash_html += f'</div>'
-        
-    dashboard.content = dash_html
-    dashboard.add_item(style_item)
-    book.add_item(dashboard)
+    # Note: We are skipping the daily dashboard page since the cover page now contains 
+    # both the weather, editorial briefing, and index of articles.
  
-    chapters = [dashboard]
+    chapters = []
     for i, art in enumerate(articles):
         is_korean = art['is_korean']
         
@@ -1001,10 +1038,11 @@ def create_epub(articles):
             """
  
         # Navigation Footer
+        prev_link = f'<a href="chap_{i-1}.xhtml" class="nav-link">← Previous Article</a>' if i > 0 else ''
         next_link = f'<a href="chap_{i+1}.xhtml" class="nav-link">Next Article →</a>' if i < len(articles) - 1 else ''
         nav_footer = f"""
             <div class="nav-footer">
-                <a href="dashboard.xhtml" class="nav-link">← Back to Dashboard</a>
+                {prev_link}
                 {next_link}
             </div>
         """
