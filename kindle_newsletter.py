@@ -933,8 +933,8 @@ def generate_cover_image(title, date_str, weather_info=None, editorial_text=None
     masthead_top = 80
     draw.line([margin + 15, masthead_top, width - margin - 15, masthead_top], fill=(0, 0, 0), width=4)
     
-    # Main Newspaper Title
-    title_text = "THE DAILY DIGEST"
+    # Main Newspaper Title (now the Date)
+    title_text = date_str.upper()
     title_w = draw.textlength(title_text, font=title_font) if hasattr(draw, 'textlength') else 350
     draw.text(((width - title_w)/2, masthead_top + 25), title_text, fill=(0, 0, 0), font=title_font)
     
@@ -951,9 +951,10 @@ def generate_cover_image(title, date_str, weather_info=None, editorial_text=None
     # Left aligned Volume
     draw.text((margin + 25, bar_top + 10), vol_str, fill=(0, 0, 0), font=meta_font)
     
-    # Right aligned Date
-    date_w = draw.textlength(date_str, font=meta_font) if hasattr(draw, 'textlength') else 100
-    draw.text((width - margin - 25 - date_w, bar_top + 10), date_str, fill=(0, 0, 0), font=meta_font)
+    # Right aligned text (now The Daily Digest)
+    right_text = "THE DAILY DIGEST"
+    date_w = draw.textlength(right_text, font=meta_font) if hasattr(draw, 'textlength') else 100
+    draw.text((width - margin - 25 - date_w, bar_top + 10), right_text, fill=(0, 0, 0), font=meta_font)
     
     # --- WEATHER BAR ---
     weather_y = bar_top + bar_height + 15
